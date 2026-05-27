@@ -195,14 +195,10 @@ describe('parseManifest', () => {
     expect(result.manifest?.skills).toEqual([path.join(root, 'skills')]);
   });
 
-  it('reports unsupported runtime fields in plugin.json without parsing them as capabilities', async () => {
+  it('reports unsupported legacy fields in plugin.json without parsing them as capabilities', async () => {
     const root = await makePlugin({
       'plugin.json': JSON.stringify({
         name: 'demo',
-        tools: [
-          { name: 'tool-a', description: 'Desc A', command: ['echo', 'a'] },
-          { name: 'tool-b', description: 'Desc B', command: ['echo', 'b'] },
-        ],
         configFile: 'cfg.json',
         config_file: 'legacy-cfg.json',
         inject: { foo: 'bar' },
@@ -218,7 +214,6 @@ describe('parseManifest', () => {
       }),
     );
     for (const field of [
-      'tools',
       'configFile',
       'config_file',
       'inject',
@@ -233,6 +228,100 @@ describe('parseManifest', () => {
         }),
       );
     }
+  });
+
+  it('parses declarative plugin tools', async () => {
+    const root = await makePlugin({
+      'plugin.json': JSON.stringify({
+        name: 'demo',
+        tools: {
+          query_finance: {
+            description: 'Query finance data',
+            inputSchema: {
+              type: 'object',
+              properties: { symbol: { type: 'string' } },
+              required: ['symbol'],
+            },
+            run: {
+              type: 'node',
+              entry: './bin/query-finance',
+              args: ['--mode', 'quote'],
+            },
+            timeoutMs: 30_000,
+          },
+        },
+      }),
+      'bin/query-finance': '#!/bin/sh\n',
+    });
+    const result = await parseManifest(root);
+    expect(result.manifest?.tools).toEqual([
+      {
+        name: 'query_finance',
+        description: 'Query finance data',
+        inputSchema: {
+          type: 'object',
+          properties: { symbol: { type: 'string' } },
+          required: ['symbol'],
+        },
+        run: {
+          type: 'node',
+          entry: path.join(root, 'bin', 'query-finance'),
+          args: ['--mode', 'quote'],
+        },
+        stdin: 'json',
+        timeoutMs: 30_000,
+      },
+    ]);
+  });
+
+  it('parses legacy array-shaped plugin tools when they use a safe local command', async () => {
+    const root = await makePlugin({
+      'plugin.json': JSON.stringify({
+        name: 'demo',
+        tools: [
+          {
+            name: 'query_finance',
+            description: 'Query finance data',
+            parameters: { type: 'object', properties: {} },
+            command: ['./bin/query-finance', '--mode', 'quote'],
+          },
+        ],
+      }),
+      'bin/query-finance': '#!/bin/sh\n',
+    });
+    const result = await parseManifest(root);
+    expect(result.manifest?.tools?.[0]).toEqual(
+      expect.objectContaining({
+        name: 'query_finance',
+        run: {
+          type: 'process',
+          command: path.join(root, 'bin', 'query-finance'),
+          args: ['--mode', 'quote'],
+        },
+      }),
+    );
+  });
+
+  it('warns and skips plugin tools whose command is not inside the plugin', async () => {
+    const root = await makePlugin({
+      'plugin.json': JSON.stringify({
+        name: 'demo',
+        tools: {
+          unsafe: {
+            description: 'Unsafe',
+            command: '/tmp/unsafe',
+          },
+        },
+      }),
+    });
+    const result = await parseManifest(root);
+    expect(result.manifest?.tools).toBeUndefined();
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'manifest.tools.unsafe.command.path_required_dot_slash',
+        severity: 'warn',
+      }),
+    );
   });
 
   it('parses skillInstructions', async () => {

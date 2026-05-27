@@ -16,3 +16,4 @@ tools:
   - WebSearch
   - FetchURL
   - mcp__*
+  - plugin__*

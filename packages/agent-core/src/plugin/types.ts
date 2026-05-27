@@ -17,6 +17,18 @@ export interface PluginSessionStart {
   readonly skill: string;
 }
 
+export type PluginToolStdinMode = 'json' | 'none';
+
+export interface PluginToolManifest {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: Record<string, unknown>;
+  readonly command: string;
+  readonly args?: readonly string[];
+  readonly stdin?: PluginToolStdinMode;
+  readonly timeoutMs?: number;
+}
+
 export interface PluginInterface {
   readonly displayName?: string;
   readonly shortDescription?: string;
@@ -37,6 +49,7 @@ export interface PluginManifest {
   readonly license?: string;
   readonly skills?: readonly string[]; // resolved absolute paths
   readonly sessionStart?: PluginSessionStart;
+  readonly tools?: readonly PluginToolManifest[];
   readonly mcpServers?: Readonly<Record<string, McpServerConfig>>;
   readonly interface?: PluginInterface;
   readonly skillInstructions?: string;
@@ -61,6 +74,16 @@ export interface PluginMcpServerInfo {
   readonly url?: string;
   readonly envKeys?: readonly string[];
   readonly headerKeys?: readonly string[];
+}
+
+export interface PluginToolInfo {
+  readonly name: string;
+  readonly runtimeName: string;
+  readonly description: string;
+  readonly command: string;
+  readonly args?: readonly string[];
+  readonly stdin: PluginToolStdinMode;
+  readonly timeoutMs: number;
 }
 
 export type PluginManifestKind = 'plugin-json' | 'kimi-plugin';
@@ -92,6 +115,7 @@ export interface PluginSummary {
   readonly enabled: boolean;
   readonly state: PluginState;
   readonly skillCount: number;
+  readonly toolCount: number;
   readonly mcpServerCount: number;
   readonly enabledMcpServerCount: number;
   readonly hasErrors: boolean;
@@ -104,6 +128,7 @@ export interface PluginInfo extends PluginSummary {
   readonly manifestKind?: PluginManifestKind;
   readonly manifestPath?: string;
   readonly manifest?: PluginManifest;
+  readonly tools: readonly PluginToolInfo[];
   readonly mcpServers: readonly PluginMcpServerInfo[];
   readonly shadowedManifestPath?: string;
   readonly diagnostics: readonly PluginDiagnostic[];
@@ -114,6 +139,20 @@ export interface EnabledPluginSessionStart {
   readonly skillName: string;
 }
 
+export interface EnabledPluginTool {
+  readonly pluginId: string;
+  readonly pluginRoot: string;
+  readonly kimiHomeDir: string;
+  readonly name: string;
+  readonly runtimeName: string;
+  readonly description: string;
+  readonly inputSchema: Record<string, unknown>;
+  readonly command: string;
+  readonly args?: readonly string[];
+  readonly stdin: PluginToolStdinMode;
+  readonly timeoutMs: number;
+}
+
 export interface ReloadSummary {
   readonly added: readonly string[];
   readonly removed: readonly string[];
@@ -121,6 +160,7 @@ export interface ReloadSummary {
 }
 
 export const PLUGIN_NAME_REGEX = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+export const PLUGIN_TOOL_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 
 export function normalizePluginId(name: string): string {
   return name.toLowerCase();

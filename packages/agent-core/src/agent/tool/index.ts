@@ -10,6 +10,7 @@ import type { McpConnectionManager, McpServerEntry } from '../../mcp';
 import { mcpResultToExecutableOutput } from '../../mcp/output';
 import { isMcpToolName, qualifyMcpToolName } from '../../mcp/tool-naming';
 import type { MCPClient } from '../../mcp/types';
+import { createPluginExecutableTool, type EnabledPluginTool } from '../../plugin';
 import { DEFAULT_AGENT_PROFILES } from '../../profile';
 import { withProviderRequestAuth } from '../../providers/request-auth';
 import { extendWorkspaceWithSkillRoots } from '../../skill';
@@ -30,20 +31,32 @@ interface McpToolEntry {
   readonly serverName: string;
 }
 
+interface PluginToolEntry {
+  readonly tool: ExecutableTool;
+  readonly pluginId: string;
+}
+
+function isPluginToolName(name: string): boolean {
+  return name.startsWith('plugin__');
+}
+
 export class ToolManager {
   protected builtinTools: Map<string, BuiltinTool> = new Map();
   protected readonly userTools: Map<string, ExecutableTool> = new Map();
+  protected readonly pluginTools: Map<string, PluginToolEntry> = new Map();
   protected readonly mcpTools: Map<string, McpToolEntry> = new Map();
   /** server name → list of qualified tool names registered for that server. */
   protected readonly mcpToolsByServer: Map<string, string[]> = new Map();
   protected enabledTools: Set<string> = new Set();
   /** Glob patterns (e.g. `mcp__*`, `mcp__github__*`) gating which MCP tools the profile exposes. */
   private mcpAccessPatterns: string[] = [];
+  private pluginAccessPatterns: string[] = [];
   protected readonly store: Partial<ToolStoreData> = {};
   private mcpToolStatusUnsubscribe: (() => void) | undefined;
 
   constructor(protected readonly agent: Agent) {
     this.attachMcpTools();
+    this.registerPluginTools(agent.pluginTools);
   }
 
   protected get toolStore(): ToolStore {
@@ -116,6 +129,15 @@ export class ToolManager {
     });
     this.userTools.delete(name);
     this.enabledTools.delete(name);
+  }
+
+  registerPluginTools(tools: readonly EnabledPluginTool[] = []): void {
+    this.pluginTools.clear();
+    for (const spec of tools) {
+      const tool = createPluginExecutableTool(spec);
+      if (this.pluginTools.has(tool.name)) continue;
+      this.pluginTools.set(tool.name, { tool, pluginId: spec.pluginId });
+    }
   }
 
   registerMcpServer(
@@ -293,12 +315,19 @@ export class ToolManager {
     });
     // MCP entries are glob patterns gated separately; the rest are exact
     // builtin/user tool names. The split keeps every caller on one string[].
-    this.enabledTools = new Set(names.filter((name) => !isMcpToolName(name)));
+    this.enabledTools = new Set(
+      names.filter((name) => !isMcpToolName(name) && !isPluginToolName(name)),
+    );
     this.mcpAccessPatterns = names.filter((name) => isMcpToolName(name));
+    this.pluginAccessPatterns = names.filter((name) => isPluginToolName(name));
   }
 
   private isMcpToolEnabled(name: string): boolean {
     return this.mcpAccessPatterns.some((pattern) => globMatch(name, pattern));
+  }
+
+  private isPluginToolEnabled(name: string): boolean {
+    return this.pluginAccessPatterns.some((pattern) => globMatch(name, pattern));
   }
 
   *toolInfos(): Iterable<ToolInfo> {
@@ -316,6 +345,14 @@ export class ToolManager {
         description: tool.description,
         active: this.enabledTools.has(tool.name),
         source: 'user',
+      };
+    }
+    for (const entry of this.pluginTools.values()) {
+      yield {
+        name: entry.tool.name,
+        description: entry.tool.description,
+        active: this.isPluginToolEnabled(entry.tool.name),
+        source: 'plugin',
       };
     }
     for (const entry of this.mcpTools.values()) {
@@ -410,11 +447,15 @@ export class ToolManager {
 
   get loopTools(): readonly ExecutableTool[] {
     const mcpNames = [...this.mcpTools.keys()].filter((name) => this.isMcpToolEnabled(name));
-    return uniq([...this.enabledTools, ...mcpNames])
+    const pluginNames = [...this.pluginTools.keys()].filter((name) => this.isPluginToolEnabled(name));
+    return uniq([...this.enabledTools, ...pluginNames, ...mcpNames])
       .toSorted((a, b) => a.localeCompare(b))
       .map(
         (name) =>
-          this.userTools.get(name) ?? this.mcpTools.get(name)?.tool ?? this.builtinTools.get(name),
+          this.userTools.get(name) ??
+          this.pluginTools.get(name)?.tool ??
+          this.mcpTools.get(name)?.tool ??
+          this.builtinTools.get(name),
       )
       .filter((tool) => !!tool);
   }

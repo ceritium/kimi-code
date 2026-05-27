@@ -18,7 +18,7 @@ import {
   type McpServerEntry,
   type SessionMcpConfig,
 } from '../mcp';
-import type { EnabledPluginSessionStart } from '../plugin';
+import type { EnabledPluginSessionStart, EnabledPluginTool } from '../plugin';
 import {
   DEFAULT_AGENT_PROFILES,
   DEFAULT_INIT_PROMPT,
@@ -55,6 +55,7 @@ export interface SessionConfig {
   readonly mcpConfig?: SessionMcpConfig;
   readonly telemetry?: TelemetryClient | undefined;
   readonly pluginSessionStarts?: readonly EnabledPluginSessionStart[];
+  readonly pluginTools?: readonly EnabledPluginTool[];
 }
 
 export interface SessionSkillConfig {
@@ -420,6 +421,7 @@ export class Session {
       telemetry: this.telemetry,
       log: this.log.createChild({ agentId: id }),
       pluginSessionStarts: type === 'main' ? this.config.pluginSessionStarts : undefined,
+      pluginTools: this.config.pluginTools,
     });
   }
 

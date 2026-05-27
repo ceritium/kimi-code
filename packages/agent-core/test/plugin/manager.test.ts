@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -6,21 +6,31 @@ import { describe, expect, it } from 'vitest';
 import yazl from 'yazl';
 
 import { PluginManager } from '../../src/plugin/manager';
+import { createPluginExecutableTool } from '../../src/plugin/tool';
 
 async function makeKimiHome(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), 'kimi-home-'));
+}
+
+async function managedPluginRoot(home: string, id: string): Promise<string> {
+  return realpath(path.join(home, 'plugins', 'managed', id));
 }
 
 async function makePlugin(
   name: string,
   options: {
     skills?: boolean;
+    version?: string;
     sessionStartSkill?: string;
     mcpServers?: Record<string, unknown>;
+    tools?: Record<string, unknown>;
   } = {},
 ): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), `plugin-${name}-`));
   const manifest: Record<string, unknown> = { name };
+  if (options.version !== undefined) {
+    manifest['version'] = options.version;
+  }
   if (options.skills === true) {
     manifest['skills'] = './skills/';
     await mkdir(path.join(root, 'skills'), { recursive: true });
@@ -36,6 +46,9 @@ async function makePlugin(
   }
   if (options.mcpServers !== undefined) {
     manifest['mcpServers'] = options.mcpServers;
+  }
+  if (options.tools !== undefined) {
+    manifest['tools'] = options.tools;
   }
   await writeFile(
     path.join(root, 'plugin.json'),
@@ -62,7 +75,8 @@ describe('PluginManager', () => {
     manager = new PluginManager({ kimiHomeDir: home });
     await manager.load();
     expect(manager.list()).toHaveLength(1);
-    expect(manager.get('demo')?.root).toBe(pluginRoot);
+    expect(manager.get('demo')?.root).toBe(await managedPluginRoot(home, 'demo'));
+    expect(manager.get('demo')?.originalSource).toBe(pluginRoot);
   });
 
   it('install() accepts a .kimi-plugin manifest', async () => {
@@ -83,13 +97,15 @@ describe('PluginManager', () => {
     const manager = new PluginManager({ kimiHomeDir: home });
     await manager.load();
     const record = await manager.install(root);
-    const rootReal = await realpath(root);
+    const managedRoot = await managedPluginRoot(home, 'superpowers');
 
     expect(record.id).toBe('superpowers');
     expect(record.manifestKind).toBe('kimi-plugin');
-    expect(record.manifest?.skills).toEqual([path.join(rootReal, 'skills')]);
+    expect(record.root).toBe(managedRoot);
+    expect(record.originalSource).toBe(root);
+    expect(record.manifest?.skills).toEqual([path.join(managedRoot, 'skills')]);
     expect(manager.pluginSkillRoots()).toContainEqual({
-      path: path.join(rootReal, 'skills'),
+      path: path.join(managedRoot, 'skills'),
       source: 'extra',
       plugin: { id: 'superpowers', instructions: 'Use Kimi tools.' },
     });
@@ -103,7 +119,7 @@ describe('PluginManager', () => {
     await expect(manager.install('relative/plugin')).rejects.toThrow(/absolute path/i);
   });
 
-  it('install() persists the real plugin root when installing through a symlink', async () => {
+  it('install() copies a symlinked plugin root into the managed plugins dir', async () => {
     const home = await makeKimiHome();
     const pluginRoot = await makePlugin('demo');
     const link = path.join(await mkdtemp(path.join(tmpdir(), 'plugin-link-')), 'demo-link');
@@ -113,10 +129,12 @@ describe('PluginManager', () => {
 
     const record = await manager.install(link);
 
-    expect(record.root).toBe(pluginRoot);
+    const managedRoot = await managedPluginRoot(home, 'demo');
+    expect(record.root).toBe(managedRoot);
+    expect(record.originalSource).toBe(link);
     const reloaded = new PluginManager({ kimiHomeDir: home });
     await reloaded.load();
-    expect(reloaded.get('demo')?.root).toBe(pluginRoot);
+    expect(reloaded.get('demo')?.root).toBe(managedRoot);
   });
 
   it('setEnabled() persists the new state', async () => {
@@ -157,19 +175,39 @@ describe('PluginManager', () => {
     await manager.install(a);
     await manager.install(b);
     await manager.setEnabled('b', false);
+    const managedA = await managedPluginRoot(home, 'a');
+    const managedB = await managedPluginRoot(home, 'b');
     expect(manager.pluginSkillRoots()).toContainEqual({
-      path: path.join(a, 'skills'),
+      path: path.join(managedA, 'skills'),
       source: 'extra',
       plugin: { id: 'a', instructions: undefined },
     });
     expect(manager.pluginSkillRoots()).not.toContainEqual({
-      path: path.join(b, 'skills'),
+      path: path.join(managedB, 'skills'),
       source: 'extra',
       plugin: { id: 'b', instructions: undefined },
     });
   });
 
-  it('reload() picks up an in-place manifest edit', async () => {
+  it('reload() picks up edits to the managed plugin copy', async () => {
+    const home = await makeKimiHome();
+    const root = await makePlugin('demo');
+    const manager = new PluginManager({ kimiHomeDir: home });
+    await manager.load();
+    await manager.install(root);
+    const managedRoot = await managedPluginRoot(home, 'demo');
+
+    await writeFile(
+      path.join(managedRoot, 'plugin.json'),
+      JSON.stringify({ name: 'demo', version: '2.0.0' }),
+      'utf8',
+    );
+    const summary = await manager.reload();
+    expect(summary.errors).toEqual([]);
+    expect(manager.get('demo')?.manifest?.version).toBe('2.0.0');
+  });
+
+  it('reload() does not reread the original local source after install', async () => {
     const home = await makeKimiHome();
     const root = await makePlugin('demo');
     const manager = new PluginManager({ kimiHomeDir: home });
@@ -178,12 +216,13 @@ describe('PluginManager', () => {
 
     await writeFile(
       path.join(root, 'plugin.json'),
-      JSON.stringify({ name: 'demo', version: '2.0.0' }),
+      JSON.stringify({ name: 'demo', version: 'source-edit' }),
       'utf8',
     );
+
     const summary = await manager.reload();
     expect(summary.errors).toEqual([]);
-    expect(manager.get('demo')?.manifest?.version).toBe('2.0.0');
+    expect(manager.get('demo')?.manifest?.version).toBeUndefined();
   });
 
   it('install() refuses to add a directory without a manifest', async () => {
@@ -194,13 +233,32 @@ describe('PluginManager', () => {
     await expect(manager.install(root)).rejects.toThrow(/manifest/i);
   });
 
-  it('install() refuses to add the same plugin twice', async () => {
+  it('install() overwrites the same local plugin and preserves user state', async () => {
     const home = await makeKimiHome();
-    const root = await makePlugin('demo');
+    const root = await makePlugin('demo', {
+      version: '1.0.0',
+      mcpServers: { finance: { command: 'finance-mcp' } },
+    });
     const manager = new PluginManager({ kimiHomeDir: home });
     await manager.load();
-    await manager.install(root);
-    await expect(manager.install(root)).rejects.toThrow(/already installed/i);
+    const first = await manager.install(root);
+    await manager.setMcpServerEnabled('demo', 'finance', true);
+    await manager.setEnabled('demo', false);
+
+    await new Promise((r) => setTimeout(r, 10));
+    const updatedRoot = await makePlugin('demo', {
+      version: '2.0.0',
+      mcpServers: { finance: { command: 'finance-mcp-v2' } },
+    });
+    const updated = await manager.install(updatedRoot);
+
+    expect(manager.list()).toHaveLength(1);
+    expect(updated.manifest?.version).toBe('2.0.0');
+    expect(updated.enabled).toBe(false);
+    expect(updated.installedAt).toBe(first.installedAt);
+    expect(updated.updatedAt).not.toBe(first.updatedAt);
+    expect(updated.originalSource).toBe(updatedRoot);
+    expect(manager.info('demo')?.mcpServers[0]?.enabled).toBe(true);
   });
 
   it('keeps a plugin in error state instead of losing it on a broken manifest', async () => {
@@ -210,7 +268,7 @@ describe('PluginManager', () => {
     await manager.load();
     await manager.install(root);
     await writeFile(
-      path.join(root, 'plugin.json'),
+      path.join(await managedPluginRoot(home, 'demo'), 'plugin.json'),
       '{ not json',
       'utf8',
     );
@@ -287,7 +345,10 @@ describe('PluginManager', () => {
     await manager.setMcpServerEnabled('demo', 'finance', true);
 
     expect(manager.enabledMcpServers()).toEqual({
-      'plugin-demo-finance': expect.objectContaining({ command: 'finance-mcp' }),
+      'plugin-demo-finance': expect.objectContaining({
+        command: 'finance-mcp',
+        env: { KIMI_CODE_HOME: home },
+      }),
     });
     expect(manager.summaries()[0]).toEqual(
       expect.objectContaining({
@@ -300,6 +361,147 @@ describe('PluginManager', () => {
     await reloaded.load();
     expect(reloaded.info('demo')?.mcpServers).toContainEqual(
       expect.objectContaining({ name: 'finance', enabled: true }),
+    );
+  });
+
+  it('enabledTools() returns executable plugin tool specs for enabled plugins', async () => {
+    const home = await makeKimiHome();
+    const root = await makePlugin('demo', {
+      tools: {
+        query_finance: {
+          description: 'Query finance data',
+          run: {
+            type: 'node',
+            entry: './bin/query-finance',
+          },
+          inputSchema: { type: 'object', properties: {} },
+        },
+      },
+    });
+    await mkdir(path.join(root, 'bin'), { recursive: true });
+    await writeFile(path.join(root, 'bin', 'query-finance'), '#!/bin/sh\n', 'utf8');
+
+    const manager = new PluginManager({ kimiHomeDir: home });
+    await manager.load();
+    await manager.install(root);
+    const managedRoot = await managedPluginRoot(home, 'demo');
+
+    expect(manager.summaries()[0]).toEqual(expect.objectContaining({ toolCount: 1 }));
+    expect(manager.info('demo')?.tools).toContainEqual(
+      expect.objectContaining({
+        name: 'query_finance',
+        runtimeName: 'plugin__demo__query_finance',
+        command: path.join(managedRoot, 'bin', 'query-finance'),
+        run: {
+          type: 'node',
+          entry: path.join(managedRoot, 'bin', 'query-finance'),
+          args: [],
+        },
+      }),
+    );
+    expect(manager.enabledTools()).toContainEqual(
+      expect.objectContaining({
+        pluginId: 'demo',
+        pluginRoot: managedRoot,
+        runtimeName: 'plugin__demo__query_finance',
+        run: {
+          type: 'node',
+          entry: path.join(managedRoot, 'bin', 'query-finance'),
+          args: [],
+        },
+      }),
+    );
+
+    await manager.setEnabled('demo', false);
+    expect(manager.enabledTools()).toEqual([]);
+  });
+
+  it('plugin executable tools pass JSON input through stdin', async () => {
+    const home = await makeKimiHome();
+    const root = await mkdtemp(path.join(tmpdir(), 'plugin-tool-run-'));
+    const script = path.join(root, 'echo-json.mjs');
+    await writeFile(
+      script,
+      [
+        '#!/usr/bin/env node',
+        "let input = '';",
+        "process.stdin.setEncoding('utf8');",
+        "process.stdin.on('data', (chunk) => { input += chunk; });",
+        "process.stdin.on('end', () => {",
+        "  const parsed = JSON.parse(input || '{}');",
+        "  process.stdout.write(JSON.stringify({ ok: true, value: parsed.value, home: process.env.KIMI_CODE_HOME }));",
+        '});',
+      ].join('\n'),
+      'utf8',
+    );
+    await chmod(script, 0o755);
+
+    const tool = createPluginExecutableTool({
+      pluginId: 'demo',
+      pluginRoot: root,
+      kimiHomeDir: home,
+      name: 'echo_json',
+      runtimeName: 'plugin__demo__echo_json',
+      description: 'Echo JSON',
+      inputSchema: { type: 'object', properties: { value: { type: 'string' } } },
+      run: {
+        type: 'process',
+        command: script,
+      },
+      stdin: 'json',
+      timeoutMs: 10_000,
+    });
+
+    const execution = tool.resolveExecution({ value: 'hello' });
+    expect(execution.isError).not.toBe(true);
+    if (execution.isError === true) throw new Error(String(execution.output));
+    const result = await execution.execute({
+      turnId: '1',
+      toolCallId: 'call-1',
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        isError: false,
+        output: JSON.stringify({ ok: true, value: 'hello', home }),
+      }),
+    );
+  });
+
+  it('plugin node tools invoke the hidden Kimi node runner', async () => {
+    const home = await makeKimiHome();
+    const root = await mkdtemp(path.join(tmpdir(), 'plugin-node-run-'));
+    const script = path.join(root, 'tool.mjs');
+    await writeFile(script, 'process.stdout.write("ok\\n");\n', 'utf8');
+
+    const tool = createPluginExecutableTool({
+      pluginId: 'demo',
+      pluginRoot: root,
+      kimiHomeDir: home,
+      name: 'node_tool',
+      runtimeName: 'plugin__demo__node_tool',
+      description: 'Run JS',
+      inputSchema: { type: 'object', properties: {} },
+      run: {
+        type: 'node',
+        entry: script,
+        args: ['node_tool'],
+      },
+      stdin: 'json',
+      timeoutMs: 10_000,
+    });
+
+    const execution = tool.resolveExecution({});
+    expect(execution.isError).not.toBe(true);
+    if (execution.isError === true) throw new Error(String(execution.output));
+    const displayDetail = (execution.display as { readonly detail?: unknown } | undefined)?.detail;
+    expect(displayDetail).toEqual(
+      expect.objectContaining({
+        command: process.execPath,
+        args: expect.arrayContaining(['__plugin_run_node', script, '--', 'node_tool']),
+        cwd: root,
+      }),
     );
   });
 
@@ -340,6 +542,7 @@ describe('PluginManager', () => {
     const after = Date.now();
 
     expect(record.originalSource).toBe(root);
+    expect(record.root).toBe(await managedPluginRoot(home, 'demo'));
     expect(record.updatedAt).toBeDefined();
     const updatedAt = new Date(record.updatedAt!).getTime();
     expect(updatedAt).toBeGreaterThanOrEqual(before);
@@ -358,6 +561,7 @@ describe('PluginManager', () => {
     await reloaded.load();
     const record = reloaded.get('demo');
     expect(record?.originalSource).toBe(root);
+    expect(record?.root).toBe(await managedPluginRoot(home, 'demo'));
     expect(record?.updatedAt).toBeDefined();
   });
 
@@ -446,19 +650,27 @@ describe('PluginManager', () => {
     expect(record.originalSource).toBe(url2);
   });
 
-  it('install() from zip-url refuses to overwrite local-path plugin', async () => {
+  it('install() from zip-url overwrites existing local-path plugin', async () => {
     const home = await makeKimiHome();
     const root = await makePlugin('zip-demo');
     const manager = new PluginManager({ kimiHomeDir: home });
     await manager.load();
-    await manager.install(root);
+    const first = await manager.install(root);
+    await manager.setEnabled('zip-demo', false);
 
     const zipBuffer = await createZipBuffer([
-      { name: 'plugin/plugin.json', data: JSON.stringify({ name: 'zip-demo' }) },
+      { name: 'plugin/plugin.json', data: JSON.stringify({ name: 'zip-demo', version: '2.0.0' }) },
     ]);
     const url = await serveOnce(zipBuffer);
 
-    await expect(manager.install(url)).rejects.toThrow(/already installed from a local directory/i);
+    const updated = await manager.install(url);
+
+    expect(updated.source).toBe('zip-url');
+    expect(updated.originalSource).toBe(url);
+    expect(updated.manifest?.version).toBe('2.0.0');
+    expect(updated.enabled).toBe(false);
+    expect(updated.installedAt).toBe(first.installedAt);
+    expect(manager.list()).toHaveLength(1);
   });
 
   it('install() rejects zip URL without manifest', async () => {

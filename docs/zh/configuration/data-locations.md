@@ -72,7 +72,7 @@ $KIMI_CODE_HOME  (默认 ~/.kimi-code)
 
 `mcp.json` 是用户级 MCP server 声明，会与项目内的 `.kimi-code/mcp.json` 合并加载。字段与项目级文件相同，详见 [MCP](../customization/mcp.md)。
 
-`plugins/installed.json` 记录已安装的 plugins、每个 plugin 是否启用，以及通过 `/plugins mcp enable` 显式启用的 plugin MCP servers 等能力状态。本地 plugin 安装只保存源路径；Zip URL 安装会解压到 `plugins/managed/<id>/`。详见 [Plugins](../customization/plugins.md)。
+`plugins/installed.json` 记录已安装的 plugins、每个 plugin 是否启用，以及在 `/plugins` 中启用或通过 `/plugins mcp enable` 启用的 plugin MCP servers 等能力状态。本地路径和 Zip URL 安装都会复制到 `plugins/managed/<id>/`；原始来源只作为展示元数据保留。详见 [Plugins](../customization/plugins.md)。
 
 OAuth 凭据以文件形式存放在数据根下的 `credentials/` 子目录，目录权限 `0o700`、文件权限 `0o600`，仅当前用户可读写。其中：
 

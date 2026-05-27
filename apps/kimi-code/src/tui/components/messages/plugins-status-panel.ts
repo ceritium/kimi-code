@@ -17,7 +17,7 @@ export function buildPluginsListLines(input: PluginsListPanelInput): readonly st
     return [
       muted('No plugins installed.'),
       '',
-      value('Try: /plugins install <path-or-zip-url>'),
+      value('Run /plugins to install one.'),
     ];
   }
   const lines: string[] = [];
@@ -31,7 +31,8 @@ export function buildPluginsListLines(input: PluginsListPanelInput): readonly st
       plugin.mcpServerCount > 0
         ? ` | ${plugin.enabledMcpServerCount}/${plugin.mcpServerCount} mcp`
         : '';
-    lines.push(`  ${muted('skills:')} ${value(String(plugin.skillCount))}${muted(mcp)}${diagnostics}`);
+    const tools = plugin.toolCount > 0 ? ` | ${plugin.toolCount} tools` : '';
+    lines.push(`  ${muted('skills:')} ${value(String(plugin.skillCount))}${muted(tools)}${muted(mcp)}${diagnostics}`);
   }
   return lines;
 }
@@ -76,11 +77,24 @@ export function buildPluginsInfoLines(input: PluginsInfoPanelInput): readonly st
   lines.push(value(`Skills (${info.manifest?.skills?.length ?? 0}):`));
   for (const dir of info.manifest?.skills ?? []) lines.push(`  ${muted('-')} ${value(dir)}`);
 
+  if (info.tools.length > 0) {
+    lines.push('');
+    lines.push(value(`Tools (${info.toolCount}):`));
+    lines.push(muted('  Available in new sessions as plugin__<plugin>__<tool>; calls require normal tool approval.'));
+    for (const tool of info.tools) {
+      const args = tool.args !== undefined && tool.args.length > 0 ? ` ${tool.args.join(' ')}` : '';
+      lines.push(`  ${muted('-')} ${value(tool.name)} ${muted(`(${tool.runtimeName})`)}`);
+      const command = tool.run.type === 'node' ? `node ${tool.run.entry}` : tool.run.command;
+      lines.push(`    ${muted('run:')} ${value(`${command}${args}`.trim())}`);
+      lines.push(`    ${muted('stdin:')} ${value(tool.stdin)} ${muted('timeout:')} ${value(`${String(tool.timeoutMs)}ms`)}`);
+    }
+  }
+
   if (info.mcpServers.length > 0) {
     lines.push('');
     lines.push(value(`MCP servers (${info.enabledMcpServerCount}/${info.mcpServerCount} enabled):`));
     if (info.enabledMcpServerCount < info.mcpServerCount) {
-      lines.push(muted(`  Enable with: /plugins mcp enable ${info.id} <server>`));
+      lines.push(muted('  Enable from /plugins, or use /plugins mcp enable <id> <server>.'));
     }
     for (const server of info.mcpServers) {
       const enabled = server.enabled ? success('enabled') : muted('disabled');

@@ -19,6 +19,7 @@ import {
 import chalk from 'chalk';
 
 import type { ColorPalette } from '#/tui/theme/colors';
+import { printableChar } from '#/tui/utils/printable-key';
 
 export interface ChoiceOption {
   /** Value passed to onSelect (e.g. the actual editor command string). */
@@ -32,6 +33,7 @@ export interface ChoiceOption {
 export interface ChoicePickerOptions {
   readonly title: string;
   readonly hint?: string;
+  readonly notice?: string;
   readonly options: readonly ChoiceOption[];
   readonly currentValue?: string;
   readonly colors: ColorPalette;
@@ -77,7 +79,7 @@ export class ChoicePickerComponent extends Container implements Focusable {
   }
 
   handleInput(data: string): void {
-    if (matchesKey(data, Key.escape)) {
+    if (matchesKey(data, Key.escape) || matchesKey(data, Key.left)) {
       this.opts.onCancel();
       return;
     }
@@ -89,7 +91,12 @@ export class ChoicePickerComponent extends Container implements Focusable {
       this.selectedIndex = Math.min(this.opts.options.length - 1, this.selectedIndex + 1);
       return;
     }
-    if (matchesKey(data, Key.enter)) {
+    if (
+      matchesKey(data, Key.enter) ||
+      matchesKey(data, Key.right) ||
+      matchesKey(data, Key.space) ||
+      printableChar(data) === ' '
+    ) {
       const chosen = this.opts.options[this.selectedIndex];
       if (chosen !== undefined) this.opts.onSelect(chosen.value);
       return;
@@ -103,8 +110,11 @@ export class ChoicePickerComponent extends Container implements Focusable {
       chalk.hex(colors.primary)('─'.repeat(width)),
       chalk.hex(colors.primary).bold(` ${this.opts.title}`),
       chalk.hex(colors.textMuted)(` ${hint}`),
-      '',
     ];
+    if (this.opts.notice !== undefined) {
+      lines.push(chalk.hex(colors.success)(` ${this.opts.notice}`));
+    }
+    lines.push('');
 
     for (let i = 0; i < this.opts.options.length; i++) {
       const opt = this.opts.options[i]!;

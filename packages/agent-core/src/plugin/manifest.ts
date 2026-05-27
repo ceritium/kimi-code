@@ -4,14 +4,23 @@ import path from 'node:path';
 import { McpServerConfigSchema, type McpServerConfig } from '../config/schema';
 import {
   PLUGIN_NAME_REGEX,
+  PLUGIN_TOOL_NAME_REGEX,
   type PluginDiagnostic,
   type PluginInterface,
   type PluginManifest,
   type PluginManifestKind,
+  type PluginToolManifest,
+  type PluginToolStdinMode,
 } from './types';
 
 const PLUGIN_JSON_PATH = 'plugin.json';
 const KIMI_PLUGIN_JSON_PATH = '.kimi-plugin/plugin.json';
+const DEFAULT_PLUGIN_TOOL_TIMEOUT_MS = 120_000;
+const MAX_PLUGIN_TOOL_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_EMPTY_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {},
+};
 
 export interface ParsedManifestResult {
   readonly manifest?: PluginManifest;
@@ -121,6 +130,7 @@ export async function parseManifest(pluginRoot: string): Promise<ParsedManifestR
     author: readAuthor(raw['author']),
     skills,
     sessionStart: readSessionStart(raw['sessionStart'], diagnostics),
+    tools: await readTools(pluginRoot, raw['tools'], diagnostics),
     mcpServers: await readMcpServers(pluginRoot, raw['mcpServers'], diagnostics),
     interface: readInterface(raw['interface']),
     skillInstructions,
@@ -140,7 +150,6 @@ function recordUnsupportedPluginJsonFields(
   diagnostics: PluginDiagnostic[],
 ): void {
   for (const field of [
-    'tools',
     'configFile',
     'config_file',
     'inject',
@@ -276,6 +285,209 @@ function readSessionStart(
   return { skill };
 }
 
+async function readTools(
+  pluginRoot: string,
+  raw: unknown,
+  diagnostics: PluginDiagnostic[],
+): Promise<PluginManifest['tools']> {
+  if (raw === undefined) return undefined;
+  const entries = toolEntries(raw, diagnostics);
+  if (entries === undefined) return undefined;
+
+  const out: PluginToolManifest[] = [];
+  for (const entry of entries) {
+    const parsed = await readTool(pluginRoot, entry.name, entry.value, diagnostics, entry.index);
+    if (parsed !== undefined) out.push(parsed);
+  }
+  return out.length === 0 ? undefined : out;
+}
+
+function toolEntries(
+  raw: unknown,
+  diagnostics: PluginDiagnostic[],
+): Array<{
+  readonly name: string;
+  readonly value: unknown;
+  readonly index?: number;
+}> | undefined {
+  if (Array.isArray(raw)) {
+    return raw.map((value, index) => {
+      const name = isObject(value) && typeof value['name'] === 'string' ? value['name'] : '';
+      return { name, value, index };
+    });
+  }
+  if (isObject(raw)) {
+    return Object.entries(raw).map(([name, value]) => ({ name, value }));
+  }
+  diagnostics.push({
+    severity: 'warn',
+    code: 'manifest.tools.invalid_type',
+    message: '"tools" must be an object or array',
+  });
+  return undefined;
+}
+
+async function readTool(
+  pluginRoot: string,
+  rawName: string,
+  rawValue: unknown,
+  diagnostics: PluginDiagnostic[],
+  index?: number,
+): Promise<PluginToolManifest | undefined> {
+  const diagnosticName = rawName.trim().length > 0 ? rawName.trim() : String(index ?? 'unknown');
+  const codePrefix = `manifest.tools.${diagnosticName}`;
+
+  if (!isObject(rawValue)) {
+    diagnostics.push({
+      severity: 'warn',
+      code: `${codePrefix}.invalid`,
+      message: `"tools.${diagnosticName}" must be an object`,
+    });
+    return undefined;
+  }
+
+  const name = rawName.trim();
+  if (!PLUGIN_TOOL_NAME_REGEX.test(name)) {
+    diagnostics.push({
+      severity: 'warn',
+      code: `${codePrefix}.invalid_name`,
+      message: `"tools.${diagnosticName}" name must match ${PLUGIN_TOOL_NAME_REGEX}`,
+    });
+    return undefined;
+  }
+
+  const description = stringField(rawValue, 'description');
+  if (description === undefined) {
+    diagnostics.push({
+      severity: 'warn',
+      code: `${codePrefix}.missing_description`,
+      message: `"tools.${name}.description" is required`,
+    });
+    return undefined;
+  }
+
+  const commandParts = readToolCommandParts(name, rawValue['command'], diagnostics);
+  if (commandParts === undefined) return undefined;
+
+  const manifestArgs = stringArrayValue(rawValue['args']);
+  if (rawValue['args'] !== undefined && manifestArgs === undefined) {
+    diagnostics.push({
+      severity: 'warn',
+      code: `${codePrefix}.args.invalid_type`,
+      message: `"tools.${name}.args" must be a string[]`,
+    });
+    return undefined;
+  }
+
+  const command = await resolvePluginPathField({
+    pluginRoot,
+    field: `tools.${name}.command`,
+    value: commandParts.command,
+    diagnostics,
+    codePrefix: `${codePrefix}.command`,
+  });
+  if (command === undefined) return undefined;
+  if (!(await isFile(command))) {
+    diagnostics.push({
+      severity: 'warn',
+      code: `${codePrefix}.command.not_a_file`,
+      message: `"tools.${name}.command" is not a file (${commandParts.command})`,
+    });
+    return undefined;
+  }
+
+  const inputSchema = readToolInputSchema(name, rawValue, diagnostics);
+  if (inputSchema === undefined) return undefined;
+
+  const stdin = readToolStdin(name, rawValue['stdin'], diagnostics);
+  if (stdin === undefined) return undefined;
+
+  return {
+    name,
+    description,
+    inputSchema,
+    command,
+    args: [...commandParts.args, ...(manifestArgs ?? [])],
+    stdin,
+    timeoutMs: readToolTimeoutMs(name, rawValue['timeoutMs'], diagnostics),
+  };
+}
+
+function readToolCommandParts(
+  name: string,
+  raw: unknown,
+  diagnostics: PluginDiagnostic[],
+): { readonly command: string; readonly args: readonly string[] } | undefined {
+  if (typeof raw === 'string' && raw.trim().length > 0) {
+    return { command: raw.trim(), args: [] };
+  }
+  if (Array.isArray(raw) && raw.length > 0 && raw.every((entry) => typeof entry === 'string')) {
+    const [command, ...args] = raw;
+    if (command !== undefined && command.trim().length > 0) {
+      return { command: command.trim(), args };
+    }
+  }
+  diagnostics.push({
+    severity: 'warn',
+    code: `manifest.tools.${name}.command.invalid_type`,
+    message: `"tools.${name}.command" must be a non-empty string or string[]`,
+  });
+  return undefined;
+}
+
+function readToolInputSchema(
+  name: string,
+  raw: Record<string, unknown>,
+  diagnostics: PluginDiagnostic[],
+): Record<string, unknown> | undefined {
+  const schema = raw['inputSchema'] ?? raw['parameters'];
+  if (schema === undefined) return DEFAULT_EMPTY_INPUT_SCHEMA;
+  if (isObject(schema)) return schema;
+  diagnostics.push({
+    severity: 'warn',
+    code: `manifest.tools.${name}.inputSchema.invalid_type`,
+    message: `"tools.${name}.inputSchema" must be a JSON schema object`,
+  });
+  return undefined;
+}
+
+function readToolStdin(
+  name: string,
+  raw: unknown,
+  diagnostics: PluginDiagnostic[],
+): PluginToolStdinMode | undefined {
+  if (raw === undefined) return 'json';
+  if (raw === 'json' || raw === 'none') return raw;
+  diagnostics.push({
+    severity: 'warn',
+    code: `manifest.tools.${name}.stdin.invalid_value`,
+    message: `"tools.${name}.stdin" must be "json" or "none"`,
+  });
+  return undefined;
+}
+
+function readToolTimeoutMs(
+  name: string,
+  raw: unknown,
+  diagnostics: PluginDiagnostic[],
+): number {
+  if (raw === undefined) return DEFAULT_PLUGIN_TOOL_TIMEOUT_MS;
+  if (
+    typeof raw === 'number' &&
+    Number.isInteger(raw) &&
+    raw > 0 &&
+    raw <= MAX_PLUGIN_TOOL_TIMEOUT_MS
+  ) {
+    return raw;
+  }
+  diagnostics.push({
+    severity: 'warn',
+    code: `manifest.tools.${name}.timeoutMs.invalid_value`,
+    message: `"tools.${name}.timeoutMs" must be an integer between 1 and ${String(MAX_PLUGIN_TOOL_TIMEOUT_MS)}`,
+  });
+  return DEFAULT_PLUGIN_TOOL_TIMEOUT_MS;
+}
+
 async function readMcpServers(
   pluginRoot: string,
   raw: unknown,
@@ -408,7 +620,13 @@ function stringField(raw: Record<string, unknown>, key: string): string | undefi
 
 function stringArrayField(raw: Record<string, unknown>, key: string): readonly string[] | undefined {
   const value = raw[key];
-  if (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string')) return undefined;
+  return stringArrayValue(value);
+}
+
+function stringArrayValue(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string')) {
+    return undefined;
+  }
   return value as readonly string[];
 }
 

@@ -1,0 +1,99 @@
+{
+  "name": "kimi-datasource",
+  "version": "2.0.2-kimi.1",
+  "protocol": "1",
+  "description": "Finance, macro, enterprise, and academic data tools for Kimi Code.",
+  "keywords": ["finance", "data-source", "skills", "tools"],
+  "tools": {
+    "query_stock": {
+      "description": "Query realtime stock price, realtime technical indicators, open summaries, or close summaries for up to 3 tickers.",
+      "run": {
+        "type": "node",
+        "entry": "./bin/kimi-datasource.mjs",
+        "args": ["query_stock"]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "description": "Ticker code list separated by commas, for example 600519.SH or 0700.HK."
+          },
+          "type": {
+            "type": "string",
+            "enum": ["realtime_price", "realtime_tech", "open_summary", "close_summary"],
+            "description": "Realtime stock query type."
+          },
+          "time": {
+            "type": "string",
+            "description": "Optional time parameter for supported realtime endpoints."
+          },
+          "file_path": {
+            "type": "string",
+            "description": "Optional CSV output path. When omitted, the tool chooses a temporary path."
+          }
+        },
+        "required": ["ticker"]
+      },
+      "timeoutMs": 60000
+    },
+    "get_data_source_desc": {
+      "description": "Get the current API documentation for one Kimi data source before calling a specific API.",
+      "run": {
+        "type": "node",
+        "entry": "./bin/kimi-datasource.mjs",
+        "args": ["get_data_source_desc"]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "stock_finance_data",
+              "yahoo_finance",
+              "world_bank_open_data",
+              "tianyancha",
+              "arxiv",
+              "scholar"
+            ],
+            "description": "Data source name."
+          }
+        },
+        "required": ["name"]
+      },
+      "timeoutMs": 60000
+    },
+    "call_data_source_tool": {
+      "description": "Call one API from a Kimi data source after reading get_data_source_desc.",
+      "run": {
+        "type": "node",
+        "entry": "./bin/kimi-datasource.mjs",
+        "args": ["call_data_source_tool"]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "data_source_name": {
+            "type": "string",
+            "description": "Data source name returned or documented by get_data_source_desc."
+          },
+          "api_name": {
+            "type": "string",
+            "description": "API name from the data source description."
+          },
+          "params": {
+            "type": "object",
+            "description": "API parameters that match the data source description."
+          }
+        },
+        "required": ["data_source_name", "api_name", "params"]
+      },
+      "timeoutMs": 60000
+    }
+  },
+  "interface": {
+    "displayName": "Kimi Datasource",
+    "shortDescription": "Finance, macro, enterprise, and academic data tools"
+  }
+}

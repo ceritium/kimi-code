@@ -1,18 +1,24 @@
 # Plugins
 
-Plugins 围绕 `plugin.json` manifest 打包可复用的 Kimi Code CLI 行为。一个 plugin 可以贡献 Skills，为这些 Skills 增加插件级说明，声明会话开始时要加载的 Skill，也可以声明需要用户显式启用的 MCP servers。多宿主仓库可以把同一份 Kimi manifest 放在 `.kimi-plugin/plugin.json`，避免占用仓库根目录。
+Plugins 围绕 `plugin.json` manifest 打包可复用的 Kimi Code CLI 行为。一个 plugin 可以贡献 Skills，注册命令型 tools，为这些 Skills 增加插件级说明，声明会话开始时要加载的 Skill，也可以声明需要用户显式启用的 MCP servers。多宿主仓库可以把同一份 Kimi manifest 放在 `.kimi-plugin/plugin.json`，避免占用仓库根目录。
 
-Kimi Code CLI plugins 是数据包，不是任意命令运行时。安装 plugin 不会执行 plugin 提供的 Python、Node.js、Shell 或 hook 脚本。如果一个流程需要外部工具或实时数据，优先用 Skill 指导 Agent 调用 Kimi Code CLI 现有工具，或者声明 MCP server 并让用户显式启用。
+安装 plugin 本身不会执行 plugin 提供的 Python、Node.js、Shell 或 hook 脚本。声明式 plugin tools 只会注册到新会话里，只有模型真正调用 tool 时才会按普通工具审批流程执行。只有用户显式启用 `mcpServers` 后，新会话才会启动对应 MCP server。
 
 ## 安装与管理 plugins
 
-在 TUI 中使用 `/plugins`：
+在 TUI 中运行 `/plugins` 会打开交互式 plugin 管理器。选择器会列出已安装的 plugins，并让你安装、查看、启用、禁用、移除、重载，以及启用或禁用 plugin MCP servers，不需要记住子命令。用 `Enter` 或 `→` 打开详情，用 `Space` 直接启用或禁用已安装 plugin，用 `←` 或 `Esc` 返回。Marketplace 里 `Enter` 或 `Space` 会安装或更新当前选中的 plugin；已安装条目也可以用 `→` 打开详情。
+
+快捷命令仍然可用于快速操作或脚本：
 
 ```sh
 /plugins
+/plugins <id>
+/plugins <path-or-zip-url>
 /plugins install /absolute/path/to/plugin
 /plugins install ./relative-plugin
 /plugins install https://example.com/plugin.zip
+/plugins marketplace
+/plugins marketplace ./plugins/marketplace.json
 /plugins info <id>
 /plugins enable <id>
 /plugins disable <id>
@@ -22,11 +28,35 @@ Kimi Code CLI plugins 是数据包，不是任意命令运行时。安装 plugin
 /plugins mcp disable <id> <server>
 ```
 
-本地目录只会登记到 `installed.json`，不会被复制。Zip URL 会被下载、解压，并保存到 Kimi Code CLI 管理的 plugin 目录中。移除 plugin 只删除安装记录，不会删除原始本地源码目录。
+当前可直接安装的示例包：
 
-Plugin 变更只对新会话生效。安装、启用、禁用、移除、重载 plugin，或启用 plugin MCP server 后，需要通过 `/new` 开启新会话，新的 Skills、`sessionStart.skill` 和 MCP servers 才会进入会话。已有会话继续使用启动时的快照。
+```sh
+/plugins https://kimi-1300010026.cos.ap-beijing.myqcloud.com/kimi-datasource.zip
+/plugins https://kimi-1300010026.cos.ap-beijing.myqcloud.com/superpowers-kimi-5.1.0-kimi.1.zip
+```
 
-`/plugins reload` 会重新读取 `installed.json` 和每个 plugin manifest，让 `/plugins` 与 `/plugins info <id>` 展示最新安装状态和 diagnostics。它不会热更新当前会话里的 Skills 或 MCP 连接。
+官方 marketplace 默认从 `https://code.kimi.com/kimi-code/plugins/marketplace.json` 加载。在 `/plugins` 中选择 **Browse official marketplace**，即可查看 marketplace 条目并直接安装。CDN 可以托管整个 marketplace 目录，目录根部放 `marketplace.json`；相对 plugin source 会按这个文件所在目录解析。
+
+需要测试预发 CDN 文件或其他 marketplace 时，可以覆盖 marketplace 来源：
+
+```sh
+KIMI_CODE_PLUGIN_MARKETPLACE_URL=https://staging.example.com/plugins/marketplace.json kimi
+```
+
+也可以不改环境变量，临时打开一个 marketplace 文件：
+
+```sh
+/plugins marketplace plugins/marketplace.json
+```
+
+CLI 开发时，`pnpm dev:cli` 会为仓库的 `plugins/` 目录启动一个 loopback marketplace server，并只为这次 dev 进程临时设置 `KIMI_CODE_PLUGIN_MARKETPLACE_URL=http://127.0.0.1:<port>/marketplace.json`。这个 server 会把本地目录型 source 临时改成 zip URL，让 marketplace 安装走和 CDN 一样的下载路径。需要在 dev 中测试真实 CDN 时，运行 `KIMI_CODE_PLUGIN_MARKETPLACE_URL=https://code.kimi.com/kimi-code/plugins/marketplace.json pnpm dev:cli`；dev wrapper 会使用这个值，不再启动本地 marketplace server。
+
+本地目录和 Zip URL 都会复制到 Kimi Code CLI 管理的 plugin 目录 `$KIMI_CODE_HOME/plugins/managed/<id>/`。再次安装同一个 plugin id 会覆盖这份托管副本，并保留 plugin 的启用状态和 MCP server 开关。`installed.json` 记录这份托管副本，同时保留原始来源用于展示。移除 plugin 会先二次确认，确认后只删除安装记录，不会删除托管副本或原始本地源码目录。
+
+Plugin 变更只对新会话生效。安装、启用、禁用、移除、重载 plugin，或启用 plugin MCP server 后，需要通过 `/new` 开启新会话，新的 Skills、plugin tools、`sessionStart.skill` 和 MCP servers 才会进入会话。已有会话继续使用启动时的快照。
+
+重载操作会重新读取 `installed.json` 和每个 plugin manifest，让 `/plugins` 与 `/plugins info <id>` 展示最新安装状态和 diagnostics。它不会热更新当前会话里的 Skills 或 MCP 连接。
+因为本地路径安装实际运行的是托管副本，安装后继续修改原始源码目录不会影响已安装 plugin；需要重新安装才会更新。
 
 ## Manifest 格式
 
@@ -56,11 +86,18 @@ Kimi Code CLI 不读取 `.codex-plugin/plugin.json`。如果同时存在 `plugin
   "sessionStart": {
     "skill": "using-finance"
   },
-  "skillInstructions": "Prefer finance MCP tools for live market data. Do not invent live prices.",
-  "mcpServers": {
-    "finance": {
-      "command": "uvx",
-      "args": ["kimi-finance-mcp"]
+  "skillInstructions": "Prefer finance plugin tools for live market data. Do not invent live prices.",
+  "tools": {
+    "query_finance": {
+      "description": "Query finance data",
+      "command": "./bin/query-finance",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" }
+        },
+        "required": ["symbol"]
+      }
     }
   },
   "interface": {
@@ -72,18 +109,21 @@ Kimi Code CLI 不读取 `.codex-plugin/plugin.json`。如果同时存在 `plugin
 
 支持的字段：
 
-| 字段 | 说明 |
-| --- | --- |
-| `name` | 必填，作为 plugin id 来源。必须匹配 `[a-z0-9][a-z0-9_-]{0,63}`。 |
-| `version`、`description`、`keywords`、`author`、`homepage`、`license` | 展示元数据。 |
-| `skills` | 一个路径或路径数组。每个路径必须以 `./` 开头，并且符号链接解析后仍位于 plugin 根目录内。 |
-| 根目录 `SKILL.md` | 如果省略 `skills`，且 plugin 根目录存在 `SKILL.md`，则根目录会作为单 Skill root 处理。 |
-| `sessionStart.skill` | 声明式地在新会话或恢复会话开始时，把指定 Skill 注入到主 Agent。 |
-| `skillInstructions` | 每次加载此 plugin 的 Skill 时，附加到 Skill 内容前面的额外说明。 |
-| `mcpServers` | MCP server 声明。安装后会展示，但每个 server 默认禁用，直到用户显式启用。 |
-| `interface` | `/plugins info` 的展示字段，例如 `displayName`、`shortDescription`、`longDescription`、`developerName`、`capabilities`、`websiteURL` 和 `defaultPrompt`。 |
 
-`tools`、`configFile`、`config_file`、`inject`、`bootstrap`、`hooks`、`apps` 等旧字段只会产生 diagnostics 并被忽略。
+| 字段                                                               | 说明                                                                                                                                         |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `name`                                                           | 必填，作为 plugin id 来源。必须匹配 `[a-z0-9][a-z0-9_-]{0,63}`。                                                                                        |
+| `version`、`description`、`keywords`、`author`、`homepage`、`license` | 展示元数据。                                                                                                                                     |
+| `skills`                                                         | 一个路径或路径数组。每个路径必须以 `./` 开头，并且符号链接解析后仍位于 plugin 根目录内。                                                                                        |
+| 根目录 `SKILL.md`                                                   | 如果省略 `skills`，且 plugin 根目录存在 `SKILL.md`，则根目录会作为单 Skill root 处理。                                                                            |
+| `sessionStart.skill`                                             | 声明式地在新会话或恢复会话开始时，把指定 Skill 注入到主 Agent。                                                                                                     |
+| `skillInstructions`                                              | 每次加载此 plugin 的 Skill 时，附加到 Skill 内容前面的额外说明。                                                                                                |
+| `tools`                                                          | 命令型 tool 声明。tool 只有被调用时才执行，默认通过 stdin 接收 JSON，并以 `plugin__<plugin>__<tool>` 暴露给模型。                                                       |
+| `mcpServers`                                                     | MCP server 声明。安装后会展示，但每个 server 默认禁用，直到用户显式启用。                                                                                             |
+| `interface`                                                      | `/plugins info` 的展示字段，例如 `displayName`、`shortDescription`、`longDescription`、`developerName`、`capabilities`、`websiteURL` 和 `defaultPrompt`。 |
+
+
+`configFile`、`config_file`、`inject`、`bootstrap`、`hooks`、`apps` 等旧字段只会产生 diagnostics 并被忽略。
 
 ## Skills 与 session start
 
@@ -102,6 +142,38 @@ my-plugin/
 `sessionStart.skill` 是声明式会话启动规则：它会在会话开始时，把某个 Skill 一次性加载到主 Agent 上下文中。它不会执行代码。适合用于 plugin 需要在第一个用户任务前建立工作规则的场景，例如把另一个工具环境里的术语映射到 Kimi Code CLI 工具。
 
 无论 Skill 是通过 `sessionStart.skill`、`/skill:<name>`，还是模型自动调用加载，`skillInstructions` 都会跟 Skill 内容放在一起。
+
+## Plugin tools
+
+Plugin tools 是声明式配置，不会 import 插件里的 JavaScript。Kimi Code CLI 会把每个 `command` 解析到托管 plugin 根目录内，并用带命名空间的名字注册：
+
+```json
+{
+  "tools": {
+    "query_finance": {
+      "description": "Query finance data",
+      "command": "./bin/query-finance",
+      "args": ["quote"],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" }
+        },
+        "required": ["symbol"]
+      }
+    }
+  }
+}
+```
+
+规则：
+
+- `command` 必须以 `./` 开头，符号链接解析后仍在 plugin 根目录内，并且指向一个文件。
+- `args` 是可选字符串数组。Kimi Code CLI 调 plugin tool 时不会经过 shell。
+- tool input 默认以 JSON 写入 stdin；如果不需要 stdin，可以设置 `"stdin": "none"`。
+- `timeoutMs` 默认 `120000`，上限 `600000`。
+- 运行时环境包含 `KIMI_CODE_HOME`、`KIMI_PLUGIN_ROOT` 和 `KIMI_PLUGIN_DATA`。
+- 模型看到的 tool 名是 `plugin__<plugin-id>__<tool-name>`，例如 `plugin__kimi-datasource__query_stock`。
 
 ## Plugin 中的 MCP servers
 
@@ -135,6 +207,10 @@ Plugin MCP servers 复用 [MCP](./mcp.md) 的 server schema。可以声明 stdio
 安装 plugin 不会启动它的 MCP servers。需要显式启用：
 
 ```sh
+/plugins
+# 选择对应 plugin，再选择 "Enable MCP server"
+
+# 或使用快捷命令：
 /plugins mcp enable kimi-finance finance
 /new
 ```
@@ -146,7 +222,8 @@ Plugin MCP servers 复用 [MCP](./mcp.md) 的 server schema。可以声明 stdio
 Plugins 会被保守加载：
 
 - 安装和会话启动时，只读取 `plugin.json`、`.kimi-plugin/plugin.json` 与 Markdown Skill 文件。
-- Plugin 提供的脚本、命令、hooks 和旧式工具运行时不会由 plugin loader 执行。
+- Plugin tools 不会在安装或会话启动时执行；只有被当作工具调用时才执行，并走普通审批流程。
+- Hooks 和旧式工具运行时不会由 plugin loader 执行。
 - Plugin 路径在解析符号链接后必须仍位于 plugin 根目录内。
-- Plugin 声明的 MCP servers 默认不启用，只有 `/plugins mcp enable` 后的新会话才会启动。
+- Plugin 声明的 MCP servers 默认不启用，只有在 `/plugins` 中启用或使用 `/plugins mcp enable` 后的新会话才会启动。
 - 损坏的 manifest 或不安全路径会变成 `/plugins info <id>` 中的 diagnostics，不会让无关会话崩溃。

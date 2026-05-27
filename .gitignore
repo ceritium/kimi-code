@@ -11,3 +11,5 @@ coverage/
 .conductor
 .kimi-stash-dir
 superpowers/
+!plugins/superpowers/
+!plugins/superpowers/**

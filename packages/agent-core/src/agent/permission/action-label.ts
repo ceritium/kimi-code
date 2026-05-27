@@ -121,6 +121,18 @@ export function describeApprovalAction(
     }
   }
 
+  if (toolName.startsWith('plugin__')) {
+    const rest = toolName.slice('plugin__'.length);
+    const sep = rest.indexOf('__');
+    if (sep >= 0) {
+      const pluginId = rest.slice(0, sep);
+      const innerTool = rest.slice(sep + 2);
+      if (innerTool.length > 0) {
+        return `call plugin tool: ${pluginId}:${innerTool}`;
+      }
+    }
+  }
+
   return `call ${toolName}`;
 }
 

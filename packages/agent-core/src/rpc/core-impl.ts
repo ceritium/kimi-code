@@ -182,6 +182,7 @@ export class KimiCore implements PromisableMethods<CoreAPI> {
 
     await this.pluginsReady;
     const pluginSessionStarts = this.plugins.enabledSessionStarts();
+    const pluginTools = this.plugins.enabledTools();
     const mcpConfig = this.mergePluginMcpConfig(baseMcpConfig);
 
     // Session ctor attaches its own log sink. If anything in the setup-after-
@@ -201,6 +202,7 @@ export class KimiCore implements PromisableMethods<CoreAPI> {
       mcpConfig,
       telemetry: withTelemetryContext(this.telemetry, { sessionId: summary.id }),
       pluginSessionStarts,
+      pluginTools,
     });
     try {
       session.metadata = {
@@ -265,6 +267,7 @@ export class KimiCore implements PromisableMethods<CoreAPI> {
     });
     await this.pluginsReady;
     const pluginSessionStarts = this.plugins.enabledSessionStarts();
+    const pluginTools = this.plugins.enabledTools();
     const mcpConfig = this.mergePluginMcpConfig(baseMcpConfig);
     const session = new Session({
       runtime: await this.resolveRuntime(config),
@@ -282,6 +285,7 @@ export class KimiCore implements PromisableMethods<CoreAPI> {
       telemetry: withTelemetryContext(this.telemetry, { sessionId: summary.id }),
       initializeMainAgent: false,
       pluginSessionStarts,
+      pluginTools,
     });
     try {
       await session.resume();

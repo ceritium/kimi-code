@@ -72,7 +72,7 @@ The tree above shows a typical layout under the default data root (`~/.kimi-code
 
 `mcp.json` holds user-level MCP server declarations and is merged with the project-local `.kimi-code/mcp.json` at load time. The fields are the same as the project-level file; see [MCP](../customization/mcp.md) for details.
 
-`plugins/installed.json` records installed plugins, whether each plugin is enabled, and explicit capability state such as plugin MCP servers enabled via `/plugins mcp enable`. Local plugin installs store only the source path. Zip URL installs are extracted under `plugins/managed/<id>/`. See [Plugins](../customization/plugins.md) for details.
+`plugins/installed.json` records installed plugins, whether each plugin is enabled, and explicit capability state such as plugin MCP servers enabled from `/plugins` or via `/plugins mcp enable`. Local path and Zip URL installs are copied under `plugins/managed/<id>/`; the original source is retained only as display metadata. See [Plugins](../customization/plugins.md) for details.
 
 OAuth credentials are stored as files under the `credentials/` subdirectory of the data root. The parent directory uses mode `0o700` and each credential file uses mode `0o600`, readable and writable only by the current user. There are two sub-locations:
 
@@ -133,5 +133,5 @@ To clean up only part of the data:
 | Clear hosted Kimi / Open Platform OAuth login state | Run `/logout` (clears only the current provider's OAuth), or delete the corresponding `~/.kimi-code/credentials/<name>.json` |
 | Clear MCP server OAuth login state | Delete the `~/.kimi-code/credentials/mcp/` directory; `/logout` **does not** clear MCP OAuth credentials |
 | Remove user-level MCP declarations | Delete `~/.kimi-code/mcp.json` |
-| Clear plugin install records and managed zip plugins | Delete the `~/.kimi-code/plugins/` directory; local plugin source directories are not deleted |
+| Clear plugin install records and managed plugin copies | Delete the `~/.kimi-code/plugins/` directory; original local plugin source directories are not deleted |
 | Clear user-level Skills | Delete the `~/.kimi-code/skills/` directory |

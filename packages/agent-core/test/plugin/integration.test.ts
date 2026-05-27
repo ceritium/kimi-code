@@ -24,9 +24,10 @@ describe('PluginManager → SkillRegistry integration', () => {
     const manager = new PluginManager({ kimiHomeDir: home });
     await manager.load();
     await manager.install(pluginRoot);
+    const managedRoot = await realpath(path.join(home, 'plugins', 'managed', 'demo'));
 
     expect(manager.pluginSkillRoots()).toContainEqual({
-      path: path.join(pluginRoot, 'skills'),
+      path: path.join(managedRoot, 'skills'),
       source: 'extra',
       plugin: { id: 'demo', instructions: undefined },
     });

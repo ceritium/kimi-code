@@ -12,7 +12,7 @@ import {
   type Tool,
 } from '@moonshot-ai/kosong';
 
-import type { EnabledPluginSessionStart } from '#/plugin';
+import type { EnabledPluginSessionStart, EnabledPluginTool } from '#/plugin';
 
 import type { McpConnectionManager } from '../mcp';
 import {
@@ -84,6 +84,7 @@ export interface AgentConfig {
   readonly log?: Logger;
   readonly telemetry?: TelemetryClient | undefined;
   readonly pluginSessionStarts?: readonly EnabledPluginSessionStart[];
+  readonly pluginTools?: readonly EnabledPluginTool[];
 }
 
 export class Agent {
@@ -91,6 +92,7 @@ export class Agent {
   readonly homedir?: string;
   readonly skills?: SkillManager;
   readonly pluginSessionStarts: readonly EnabledPluginSessionStart[];
+  readonly pluginTools: readonly EnabledPluginTool[];
   readonly rawGenerate: typeof generate;
   readonly rpc: SDKAgentRPC;
   readonly telemetry: TelemetryClient;
@@ -124,6 +126,7 @@ export class Agent {
       this.skills = new SkillManager(this, config.skills);
     }
     this.pluginSessionStarts = config.pluginSessionStarts ?? [];
+    this.pluginTools = config.pluginTools ?? [];
     this.rawGenerate = config.generate ?? generate;
     this.providerManager =
       config.sessionId === undefined

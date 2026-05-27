@@ -1,0 +1,975 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kimi Code Plugin Tools Registration Research</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f8f5;
+        --surface: #ffffff;
+        --surface-soft: #f1f4ef;
+        --ink: #1e211b;
+        --muted: #667064;
+        --line: #d8ded4;
+        --green: #286b4b;
+        --green-soft: #e5f1ea;
+        --amber: #8a5b13;
+        --amber-soft: #fbefd8;
+        --red: #9a3a31;
+        --red-soft: #fae5e2;
+        --blue: #315f89;
+        --blue-soft: #e5eef7;
+        --purple: #6b4c80;
+        --purple-soft: #eee7f3;
+        --shadow: 0 10px 30px rgba(29, 35, 28, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          15px/1.65 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        letter-spacing: 0;
+      }
+
+      a {
+        color: var(--blue);
+      }
+
+      .page {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 32px 22px 56px;
+      }
+
+      header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 24px;
+        align-items: start;
+        padding: 22px 0 28px;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        line-height: 1.22;
+        letter-spacing: 0;
+      }
+
+      h1 {
+        font-size: clamp(30px, 4vw, 48px);
+      }
+
+      h2 {
+        font-size: 24px;
+      }
+
+      h3 {
+        font-size: 18px;
+      }
+
+      p {
+        margin: 10px 0 0;
+      }
+
+      code,
+      pre {
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+          monospace;
+      }
+
+      code {
+        background: #eef1eb;
+        border: 1px solid #dbe1d8;
+        border-radius: 5px;
+        padding: 1px 5px;
+        font-size: 0.92em;
+      }
+
+      pre {
+        margin: 14px 0 0;
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #20251f;
+        color: #f3f4ed;
+        padding: 14px 16px;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .meta {
+        color: var(--muted);
+        margin-top: 12px;
+      }
+
+      .badge-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 18px;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        border-radius: 999px;
+        padding: 4px 10px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      .toc {
+        position: sticky;
+        top: 16px;
+        width: 230px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.88);
+        backdrop-filter: blur(8px);
+        box-shadow: var(--shadow);
+        padding: 14px;
+      }
+
+      .toc strong {
+        display: block;
+        margin-bottom: 8px;
+      }
+
+      .toc a {
+        display: block;
+        padding: 5px 0;
+        color: var(--muted);
+        text-decoration: none;
+      }
+
+      .toc a:hover {
+        color: var(--ink);
+      }
+
+      .section {
+        margin-top: 22px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+        padding: 22px;
+      }
+
+      .section > h2 + p {
+        color: var(--muted);
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 18px;
+      }
+
+      .summary-card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px;
+        background: var(--surface-soft);
+      }
+
+      .summary-card.good {
+        background: var(--green-soft);
+        border-color: #bfd9ca;
+      }
+
+      .summary-card.warn {
+        background: var(--amber-soft);
+        border-color: #ead5a9;
+      }
+
+      .summary-card.risk {
+        background: var(--red-soft);
+        border-color: #ebc3bd;
+      }
+
+      .summary-card strong {
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      .compare-wrap {
+        margin-top: 16px;
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--surface);
+        min-width: 860px;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid var(--line);
+        border-right: 1px solid var(--line);
+        padding: 11px 12px;
+        vertical-align: top;
+        text-align: left;
+      }
+
+      th {
+        background: #edf1e9;
+        font-weight: 650;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      td:last-child,
+      th:last-child {
+        border-right: 0;
+      }
+
+      .pill {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 12px;
+        line-height: 1.6;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      .pill.command {
+        color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .pill.mcp {
+        color: var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .pill.runtime {
+        color: var(--purple);
+        background: var(--purple-soft);
+      }
+
+      .pill.risk {
+        color: var(--red);
+        background: var(--red-soft);
+      }
+
+      .impl-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 16px;
+      }
+
+      .impl {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 15px;
+        background: #fff;
+      }
+
+      .impl h3 {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .impl ul,
+      .section ul,
+      .section ol {
+        margin: 10px 0 0;
+        padding-left: 20px;
+      }
+
+      .impl li,
+      .section li {
+        margin: 6px 0;
+      }
+
+      .refs {
+        margin-top: 10px;
+        display: grid;
+        gap: 6px;
+      }
+
+      .ref {
+        display: block;
+        color: var(--muted);
+        font-size: 13px;
+        word-break: break-all;
+      }
+
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 16px;
+      }
+
+      .flow-step {
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 13px;
+        background: var(--surface-soft);
+        min-height: 116px;
+      }
+
+      .flow-step strong {
+        display: block;
+        margin-bottom: 8px;
+      }
+
+      .flow-step:not(:last-child)::after {
+        content: "";
+        position: absolute;
+        right: -10px;
+        top: 52px;
+        width: 10px;
+        height: 2px;
+        background: var(--line);
+      }
+
+      .decision {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+        margin-top: 16px;
+      }
+
+      .decision .yes {
+        border: 1px solid #bdd9ca;
+        background: var(--green-soft);
+      }
+
+      .decision .no {
+        border: 1px solid #ebc3bd;
+        background: var(--red-soft);
+      }
+
+      .decision > div {
+        border-radius: 8px;
+        padding: 15px;
+      }
+
+      .callout {
+        border-left: 4px solid var(--green);
+        background: var(--green-soft);
+        padding: 12px 14px;
+        border-radius: 6px;
+        margin-top: 14px;
+      }
+
+      details {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 12px 14px;
+        margin-top: 12px;
+      }
+
+      summary {
+        cursor: pointer;
+        font-weight: 650;
+      }
+
+      .filters {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      button {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #fff;
+        color: var(--ink);
+        padding: 7px 10px;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      button.active {
+        border-color: var(--green);
+        background: var(--green-soft);
+        color: var(--green);
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      @media (max-width: 920px) {
+        header {
+          grid-template-columns: 1fr;
+        }
+
+        .toc {
+          position: static;
+          width: auto;
+        }
+
+        .summary-grid,
+        .impl-grid,
+        .decision,
+        .flow {
+          grid-template-columns: 1fr;
+        }
+
+        .flow-step:not(:last-child)::after {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <div>
+          <h1>插件 Tools 注册策略调研</h1>
+          <p class="meta">
+            面向 Kimi Code `/plugins` 后续支持 `kimi-datasource` 的工具注册设计。调研对象：
+            Kimi CLI、Claude Code、Codex、OpenCode、PI、OpenClaw。
+          </p>
+          <div class="badge-row">
+            <span class="badge">日期：2026-05-27</span>
+            <span class="badge">仓库：/Users/moonshot/code/kimi-code</span>
+            <span class="badge">目标：支持 datasource + 保持 Superpowers 路线</span>
+          </div>
+        </div>
+        <nav class="toc" aria-label="目录">
+          <strong>目录</strong>
+          <a href="#conclusion">结论</a>
+          <a href="#taxonomy">三类路线</a>
+          <a href="#comparison">横向对比</a>
+          <a href="#implementations">各家实现</a>
+          <a href="#kimi-code">对 Kimi Code 的落点</a>
+          <a href="#runtime-plugin">Runtime 插件取舍</a>
+          <a href="#proposal">建议方案</a>
+          <a href="#risks">风险控制</a>
+        </nav>
+      </header>
+
+      <section id="conclusion" class="section">
+        <h2>结论</h2>
+        <p>
+          datasource 不适合只靠 skill。当前 Kimi Code 代码已经支持声明式 command-backed plugin tools：
+          manifest 负责声明 schema 和命令，tool 被模型调用时才起子进程执行。它还没有支持 import 插件 JS/TS
+          runtime，也没有 trusted runtime handler。
+        </p>
+        <div class="summary-grid">
+          <div class="summary-card good">
+            <strong>当前已支持</strong>
+            <p>
+              `plugin.json` 声明工具，Kimi Code 解析后注册为
+              <code>plugin__&lt;pluginId&gt;__&lt;toolName&gt;</code>，调用时起子进程。
+            </p>
+          </div>
+          <div class="summary-card warn">
+            <strong>保留 MCP</strong>
+            <p>
+              长驻服务、多工具、OAuth、复杂集成继续走 MCP。简单数据查询、一次性计算、官方工具包可以走 command tool。
+            </p>
+          </div>
+          <div class="summary-card risk">
+            <strong>当前未支持</strong>
+            <p>
+              不 import 第三方 JS/TS 插件 runtime；不支持 runtime <code>handler</code>；不支持插件动态
+              <code>registerTool</code>。
+            </p>
+          </div>
+        </div>
+        <div class="callout">
+          现在最接近可发的形状：<strong>skills 负责教模型什么时候用，tools 负责稳定执行，manifest 负责声明 schema 和命令。</strong>
+        </div>
+      </section>
+
+      <section id="taxonomy" class="section">
+        <h2>三类路线</h2>
+        <div class="compare-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>路线</th>
+                <th>代表</th>
+                <th>核心机制</th>
+                <th>优点</th>
+                <th>主要风险</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="pill command">声明式 command tool</span></td>
+                <td>Kimi CLI</td>
+                <td>manifest 声明 command，调用 tool 时起子进程，stdin JSON / stdout result。</td>
+                <td>语言无关；适合 datasource；不需要加载插件代码才能发现 tool。</td>
+                <td>依赖本机 runtime；tool 调用就是本地代码执行。</td>
+              </tr>
+              <tr>
+                <td><span class="pill mcp">skills / commands + MCP</span></td>
+                <td>Claude Code、Codex</td>
+                <td>插件贡献 instructions、commands、skills；真实外部工具主要通过 MCP server 暴露。</td>
+                <td>边界清楚；工具协议统一；适合复杂集成。</td>
+                <td>简单官方工具也要包 MCP，成本偏高；MCP 启用/审批 UX 要做好。</td>
+              </tr>
+              <tr>
+                <td><span class="pill runtime">in-process runtime registerTool</span></td>
+                <td>OpenCode、PI、OpenClaw</td>
+                <td>宿主 import 插件 JS/TS runtime，插件调用 SDK 注册 tool/hook/provider。</td>
+                <td>能力最强；支持动态工具、UI、hook、provider、配置。</td>
+                <td>加载阶段就执行第三方代码；信任面最大；SDK 兼容成本高。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="comparison" class="section">
+        <h2>横向对比</h2>
+        <p>可以用下面按钮按路线筛选。这里关注的是“插件如何贡献 agent-callable tool”。</p>
+        <div class="filters" role="toolbar" aria-label="筛选实现">
+          <button class="active" data-filter="all">全部</button>
+          <button data-filter="command">Command Tool</button>
+          <button data-filter="mcp">MCP / Skills</button>
+          <button data-filter="runtime">Runtime SDK</button>
+        </div>
+        <div class="compare-wrap">
+          <table id="comparison-table">
+            <thead>
+              <tr>
+                <th>项目</th>
+                <th>工具声明位置</th>
+                <th>加载时机</th>
+                <th>执行方式</th>
+                <th>冲突/启用策略</th>
+                <th>对 Kimi Code 的参考价值</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr data-kind="command">
+                <td>Kimi CLI</td>
+                <td><code>plugin.json tools[].command</code></td>
+                <td>agent 初始化时扫描已安装插件</td>
+                <td>子进程，stdin JSON，stdout result</td>
+                <td>与已有 tool 重名则跳过；调用前 approval</td>
+                <td>datasource 最直接参考，但不要照搬 Python 环境假设</td>
+              </tr>
+              <tr data-kind="mcp">
+                <td>Claude Code</td>
+                <td>manifest skills/commands/MCP，没有通用 command tool</td>
+                <td>插件 discovery 后加载 commands/skills/MCP</td>
+                <td>commands 是 prompt；真实 tools 主要走 MCP</td>
+                <td>MCP server scoped，userConfig/manifest 共同驱动</td>
+                <td>适合学习 MCP 和 prompt surface 分层</td>
+              </tr>
+              <tr data-kind="mcp">
+                <td>Codex</td>
+                <td><code>.codex-plugin/plugin.json</code> 的 skills/MCP/apps/hooks</td>
+                <td>plugin layer stack 加载</td>
+                <td>MCP tools 经 server policy 暴露</td>
+                <td>per-plugin MCP enabled、tool allow/deny、approval</td>
+                <td>适合学习用户侧工具策略覆盖</td>
+              </tr>
+              <tr data-kind="runtime">
+                <td>OpenCode</td>
+                <td>JS/TS plugin hooks 里的 <code>tool</code></td>
+                <td>resolve 后动态 import 插件 runtime</td>
+                <td>直接调用插件 <code>execute(args, context)</code></td>
+                <td>hook 可改 permission、tool before/after、shell env</td>
+                <td>能力参考可以看，安全模型不适合第一版</td>
+              </tr>
+              <tr data-kind="runtime">
+                <td>PI</td>
+                <td>extension 调用 <code>registerTool</code></td>
+                <td>extension load / runtime refresh</td>
+                <td>直接调用 extension execute，可带 UI render</td>
+                <td>first registration wins；active tools 可刷新</td>
+                <td>可参考动态刷新和 UI metadata</td>
+              </tr>
+              <tr data-kind="runtime">
+                <td>OpenClaw</td>
+                <td>manifest <code>contracts.tools</code> + runtime <code>api.registerTool</code></td>
+                <td>manifest 冷发现；runtime 按需/启动加载</td>
+                <td>插件 SDK 注册 typed function</td>
+                <td>manifest 强校验、optional allowlist、trusted policy</td>
+                <td>最值得参考它的 ownership/optional/approval 设计</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="implementations" class="section">
+        <h2>各家实现展开</h2>
+        <div class="impl-grid">
+          <article class="impl">
+            <h3>Kimi CLI <span class="pill command">command</span></h3>
+            <ul>
+              <li><code>PluginToolSpec</code> 包含 <code>name</code>、<code>description</code>、<code>command</code>、<code>parameters</code>。</li>
+              <li>agent 初始化时扫描 <code>~/.kimi/plugins</code>，把插件 tool 加入 <code>KimiToolset</code>。</li>
+              <li>执行时用 <code>create_subprocess_exec</code>，不走 shell 字符串。</li>
+              <li>参数通过 stdin JSON 传入，stdout 是结果，stderr/非 0 exit 是错误。</li>
+              <li>调用前走 approval；超时默认 120 秒。</li>
+            </ul>
+            <div class="refs">
+              <span class="ref">kimi-cli/src/kimi_cli/plugin/__init__.py:21</span>
+              <span class="ref">kimi-cli/src/kimi_cli/plugin/tool.py:37</span>
+              <span class="ref">kimi-cli/src/kimi_cli/soul/agent.py:453</span>
+            </div>
+          </article>
+
+          <article class="impl">
+            <h3>Claude Code <span class="pill mcp">mcp</span></h3>
+            <ul>
+              <li>manifest 合并 metadata、hooks、commands、agents、skills、MCP、LSP、settings、userConfig。</li>
+              <li>没有通用 <code>tools[].command</code>。</li>
+              <li>commands/skills 是 prompt surface，支持替换插件根目录、skill 目录、session id 等变量。</li>
+              <li>真实外部工具主要通过 plugin MCP server 提供。</li>
+            </ul>
+            <div class="refs">
+              <span class="ref">claude-code/src/utils/plugins/schemas.ts:884</span>
+              <span class="ref">claude-code/src/utils/plugins/mcpPluginIntegration.ts:131</span>
+              <span class="ref">claude-code/src/utils/plugins/loadPluginCommands.ts:326</span>
+            </div>
+          </article>
+
+          <article class="impl">
+            <h3>Codex <span class="pill mcp">mcp</span></h3>
+            <ul>
+              <li><code>.codex-plugin/plugin.json</code> 字段主要是 skills、MCP servers、apps、hooks、interface。</li>
+              <li>加载时解析 plugin root，读取 skills/MCP/apps/hooks。</li>
+              <li>插件 MCP server 有用户侧 policy：enabled、enabled tools、disabled tools、approval mode。</li>
+              <li>没有把 manifest command 直接注册成 tool 的机制。</li>
+            </ul>
+            <div class="refs">
+              <span class="ref">codex/codex-rs/core-plugins/src/manifest.rs:12</span>
+              <span class="ref">codex/codex-rs/core-plugins/src/loader.rs:496</span>
+              <span class="ref">codex/codex-rs/config/src/types.rs:763</span>
+            </div>
+          </article>
+
+          <article class="impl">
+            <h3>OpenCode <span class="pill runtime">runtime</span></h3>
+            <ul>
+              <li>插件是 JS/TS runtime，宿主 resolve 之后动态 import。</li>
+              <li><code>Hooks</code> 可以直接贡献 <code>tool</code>，也能拦截 permission、tool before/after、shell env。</li>
+              <li>tool definition 用 Zod 参数 schema 和 <code>execute(args, context)</code>。</li>
+              <li>能力强，但加载插件本身就是执行第三方代码。</li>
+            </ul>
+            <div class="refs">
+              <span class="ref">opencode/packages/opencode/src/plugin/loader.ts:85</span>
+              <span class="ref">opencode/packages/plugin/src/index.ts:222</span>
+              <span class="ref">opencode/packages/plugin/src/tool.ts:45</span>
+              <span class="ref">opencode/packages/opencode/src/tool/registry.ts:145</span>
+            </div>
+          </article>
+
+          <article class="impl">
+            <h3>PI <span class="pill runtime">runtime</span></h3>
+            <ul>
+              <li>extension 通过 <code>registerTool</code> 注册工具。</li>
+              <li>tool definition 包含 name、label、description、promptSnippet、parameters、execute、renderCall/renderResult。</li>
+              <li>注册后刷新 tool registry，session 把 extension tools 和 SDK custom tools 合并。</li>
+              <li>first registration wins，适合插件生态但信任边界较宽。</li>
+            </ul>
+            <div class="refs">
+              <span class="ref">pi/packages/coding-agent/src/core/extensions/types.ts:426</span>
+              <span class="ref">pi/packages/coding-agent/src/core/extensions/loader.ts:217</span>
+              <span class="ref">pi/packages/coding-agent/src/core/extensions/runner.ts:373</span>
+              <span class="ref">pi/packages/coding-agent/src/core/agent-session.ts:2238</span>
+            </div>
+          </article>
+
+          <article class="impl">
+            <h3>OpenClaw <span class="pill runtime">runtime + manifest contract</span></h3>
+            <ul>
+              <li>manifest 必须先声明 <code>contracts.tools</code>，runtime 才能注册对应工具。</li>
+              <li>registry 会拒绝未声明的 runtime tool，并产生 diagnostic。</li>
+              <li><code>defineToolPlugin</code> 可以生成静态 metadata，同时 runtime 仍通过 <code>api.registerTool</code> 注册。</li>
+              <li>optional tool 需要用户 <code>tools.allow</code>，危险动作可走 trusted tool policy 审批。</li>
+            </ul>
+            <div class="refs">
+              <span class="ref">openclaw/docs/plugins/building-plugins.md:104</span>
+              <span class="ref">openclaw/docs/plugins/building-plugins.md:278</span>
+              <span class="ref">openclaw/src/plugins/registry.ts:569</span>
+              <span class="ref">openclaw/src/plugin-sdk/tool-plugin.ts:131</span>
+              <span class="ref">openclaw/extensions/skill-workshop/index.ts:28</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="kimi-code" class="section">
+        <h2>对 Kimi Code 的落点</h2>
+        <p>当前 Kimi Code 已经把 command-backed plugin tools 接进了 core、SDK 和 TUI，但还没有 runtime plugin。</p>
+        <div class="decision">
+          <div class="yes">
+            <h3>当前已经支持</h3>
+            <ul>
+              <li>本地目录和 Zip URL 安装都会复制到 <code>$KIMI_CODE_HOME/plugins/managed/&lt;id&gt;</code>。</li>
+              <li>manifest 支持根目录 <code>plugin.json</code> 和 <code>.kimi-plugin/plugin.json</code>。</li>
+              <li>支持 <code>skills</code>、root <code>SKILL.md</code> fallback、<code>sessionStart.skill</code>、<code>skillInstructions</code>。</li>
+              <li>支持 <code>tools</code>：object 或 array 形式，<code>inputSchema</code>/<code>parameters</code>，<code>stdin: json|none</code>，<code>timeoutMs</code>。</li>
+              <li>tool 暴露名为 <code>plugin__&lt;plugin&gt;__&lt;tool&gt;</code>，默认 agent/coder profile 已包含 <code>plugin__*</code>。</li>
+              <li>支持插件声明 <code>mcpServers</code>，但需要用户显式启用。</li>
+            </ul>
+          </div>
+          <div class="no">
+            <h3>当前还不支持</h3>
+            <ul>
+              <li>不支持 <code>runtime.entry</code> / <code>handler</code> 形式的 JS/TS runtime plugin。</li>
+              <li>不支持插件代码动态调用 <code>registerTool</code>。</li>
+              <li>不支持 per-plugin/per-tool enable 开关；目前 plugin tools 随插件启用进入新 session。</li>
+              <li>不支持 OpenClaw 式 optional tool allowlist；当前只有 profile 里的 <code>plugin__*</code> gating。</li>
+              <li>不支持旧 Kimi CLI 的 <code>config_file</code>/<code>inject</code> 写配置文件机制。</li>
+              <li>command 必须解析到插件根目录内的文件；不能直接写 <code>node</code> 这种 PATH command。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="refs">
+          <span class="ref">kimi-code/packages/agent-core/src/agent/tool/index.ts:83</span>
+          <span class="ref">kimi-code/packages/agent-core/src/agent/tool/index.ts:121</span>
+          <span class="ref">kimi-code/packages/agent-core/src/agent/tool/index.ts:411</span>
+          <span class="ref">kimi-code/packages/agent-core/src/plugin/types.ts:30</span>
+          <span class="ref">kimi-code/packages/agent-core/src/plugin/manager.ts:191</span>
+        </div>
+      </section>
+
+      <section id="runtime-plugin" class="section">
+        <h2>Runtime 插件取舍</h2>
+        <p>
+          如果只为 datasource，当前 command-backed tools 已经够用。如果还希望官方 marketplace 插件能用 JS/TS
+          直接实现 handler，可以做一个更窄的 <strong>trusted lazy runtime handler</strong>，但不要把它做成通用第三方
+          <code>registerTool</code> SDK。
+        </p>
+
+        <div class="decision">
+          <div class="yes">
+            <h3>可以接受的简单 runtime</h3>
+            <ul>
+              <li>只允许官方 marketplace / trusted 插件启用。</li>
+              <li>manifest 仍然声明全部 tool 名称、description、schema。</li>
+              <li>runtime 只提供 handler 实现，不能动态新增 tool。</li>
+              <li>lazy import：只有 tool 真被调用时才 import runtime entry。</li>
+              <li>不在 install、list、info、session start 阶段执行 runtime 代码。</li>
+            </ul>
+          </div>
+          <div class="no">
+            <h3>不建议第一步做的 runtime</h3>
+            <ul>
+              <li>不做 OpenCode/PI 式 in-process plugin SDK。</li>
+              <li>不开放任意 <code>api.registerTool</code>。</li>
+              <li>不开放 hooks、providers、commands、MCP 动态注册。</li>
+              <li>不自动安装第三方 npm 依赖。</li>
+              <li>不承诺外部插件 SDK 长期兼容。</li>
+            </ul>
+          </div>
+        </div>
+
+        <pre><code>{
+  "name": "kimi-datasource",
+  "skills": "./skills",
+  "runtime": {
+    "type": "node",
+    "entry": "./dist/plugin.js",
+    "trusted": true
+  },
+  "tools": {
+    "query_finance": {
+      "description": "Query finance data.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" }
+        },
+        "required": ["symbol"]
+      },
+      "handler": "queryFinance"
+    }
+  }
+}</code></pre>
+
+        <pre><code>export default {
+  handlers: {
+    async queryFinance(args, ctx) {
+      return { output: "..." };
+    }
+  }
+};</code></pre>
+
+        <details>
+          <summary>复杂度判断</summary>
+          <ul>
+            <li>代码复杂度：中等。需要 manifest schema、tool executor、runtime import/cache、trusted 判断、错误处理、测试。</li>
+            <li>产品复杂度：中等偏高。需要定义“trusted”的来源、marketplace 签名/来源策略、runtime 插件如何在 UI 中提示风险。</li>
+            <li>兼容复杂度：可控。只要明确这是 official trusted runtime handler，不是公开通用 SDK，就不需要一开始做完整 API 稳定承诺。</li>
+          </ul>
+        </details>
+
+        <div class="callout">
+          推荐顺序：先用现有 command-backed tools 发 datasource；如果官方 marketplace 需要更顺滑的 JS 实现，再单独加
+          trusted lazy runtime handler。
+        </div>
+      </section>
+
+      <section id="proposal" class="section">
+        <h2>建议方案</h2>
+        <p>
+          当前已实现的是声明式 plugin command tools。它比 skills 里提示 Bash 更稳定，比 in-process 插件 runtime 更克制，也能支撑
+          datasource。下面是推荐继续使用的 datasource manifest 形状。
+        </p>
+        <pre><code>{
+  "name": "kimi-datasource",
+  "version": "0.1.0",
+  "description": "Finance datasource tools for Kimi Code.",
+  "skills": "./skills",
+  "tools": {
+    "query_finance": {
+      "description": "Query finance data.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" }
+        },
+        "required": ["symbol"],
+        "additionalProperties": false
+      },
+      "command": "./bin/query-finance.js",
+      "args": [],
+      "stdin": "json",
+      "timeoutMs": 120000,
+      "optional": false
+    }
+  }
+}</code></pre>
+
+        <div class="flow" aria-label="建议执行流">
+          <div class="flow-step">
+            <strong>1. 安装</strong>
+            <p>插件文件复制进 <code>~/.kimi-code/plugins/managed</code>。</p>
+          </div>
+          <div class="flow-step">
+            <strong>2. 解析</strong>
+            <p>读取 <code>plugin.json</code>，校验 tool schema 和路径安全。</p>
+          </div>
+          <div class="flow-step">
+            <strong>3. 注册</strong>
+            <p>新 session 注册 <code>plugin__id__tool</code>。</p>
+          </div>
+          <div class="flow-step">
+            <strong>4. 调用</strong>
+            <p>模型调用 tool，Kimi Code 发起 approval。</p>
+          </div>
+          <div class="flow-step">
+            <strong>5. 执行</strong>
+            <p>spawn 插件内命令，stdin JSON，stdout result。</p>
+          </div>
+        </div>
+
+        <details open>
+          <summary>建议新增的核心字段</summary>
+          <ul>
+            <li><code>tools</code>：object keyed by local tool name，避免数组里重复 name。</li>
+            <li><code>inputSchema</code>：JSON Schema，直接作为模型 tool parameters。</li>
+            <li><code>command</code>：必须是 <code>./</code> 开头的插件内相对路径。</li>
+            <li><code>args</code>：字面量 argv，不做 shell 拼接。</li>
+            <li><code>stdin</code>：第一版只支持 <code>json</code>。</li>
+            <li><code>timeoutMs</code>：默认值可取 120000。</li>
+            <li><code>optional</code>：后续用于 allowlist；第一版可以先解析展示。</li>
+          </ul>
+        </details>
+      </section>
+
+      <section id="risks" class="section">
+        <h2>风险控制</h2>
+        <div class="compare-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>风险</th>
+                <th>控制方式</th>
+                <th>为什么这样做</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>任意代码执行</td>
+                <td>安装和 session start 不执行插件代码；只有 tool 被调用时才起子进程。</td>
+                <td>降低自动加载插件的风险，但承认 tool 调用本身是代码执行。</td>
+              </tr>
+              <tr>
+                <td>shell 注入</td>
+                <td>不用 shell 字符串，只用 argv spawn；参数走 stdin JSON。</td>
+                <td>避免模型参数被拼进命令行。</td>
+              </tr>
+              <tr>
+                <td>路径逃逸</td>
+                <td><code>command</code> 必须相对插件根目录，resolve 后不能逃出 root。</td>
+                <td>避免插件 manifest 指向任意系统路径。</td>
+              </tr>
+              <tr>
+                <td>工具名冲突</td>
+                <td>对模型暴露 <code>plugin__&lt;plugin&gt;__&lt;tool&gt;</code>。</td>
+                <td>对齐 MCP 的命名空间思想，避免覆盖 builtin/MCP tools。</td>
+              </tr>
+              <tr>
+                <td>环境缺失</td>
+                <td>在 <code>/plugins info</code> 做诊断；官方插件尽量用随包 JS 或声明 runtime。</td>
+                <td>datasource 不应假设用户有 Python/pip。</td>
+              </tr>
+              <tr>
+                <td>危险副作用</td>
+                <td>默认走 approval；后续加 per-tool policy、allowlist、official trusted 标记。</td>
+                <td>不能把插件 tool 当成 builtin 安全能力。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout">
+          最小实现原则：先让 datasource 这类插件能稳定贡献 tool，再逐步补 per-tool enable、approval policy、official trust、runtime 诊断。
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const buttons = document.querySelectorAll("[data-filter]");
+      const rows = document.querySelectorAll("#comparison-table tbody tr");
+
+      buttons.forEach((button) => {
+        button.addEventListener("click", () => {
+          const filter = button.dataset.filter;
+          buttons.forEach((item) => item.classList.toggle("active", item === button));
+          rows.forEach((row) => {
+            row.classList.toggle("hidden", filter !== "all" && row.dataset.kind !== filter);
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

@@ -1,6 +1,6 @@
 import type { ExecutableTool } from '../../loop';
 
-export type ToolSource = 'builtin' | 'user' | 'mcp';
+export type ToolSource = 'builtin' | 'user' | 'mcp' | 'plugin';
 
 export type BuiltinTool<Input = unknown> = ExecutableTool<Input>;
 

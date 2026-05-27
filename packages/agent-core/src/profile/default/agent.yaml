@@ -25,6 +25,7 @@ tools:
   - EnterPlanMode
   - ExitPlanMode
   - mcp__*
+  - plugin__*
 
 subagents:
   coder:

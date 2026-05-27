@@ -9,6 +9,7 @@ import { parseManifest, type ParsedManifestResult } from './manifest';
 import { readInstalled, writeInstalled, type InstalledRecord } from './store';
 import { resolveInstallSource } from './source';
 import {
+  type EnabledPluginTool,
   type EnabledPluginSessionStart,
   type PluginCapabilityState,
   type PluginInfo,
@@ -16,9 +17,12 @@ import {
   type PluginRecord,
   type PluginSource,
   type PluginSummary,
+  type PluginToolInfo,
   type ReloadSummary,
   normalizePluginId,
 } from './types';
+
+const MAX_PLUGIN_TOOL_NAME_LENGTH = 64;
 
 export interface PluginManagerOptions {
   readonly kimiHomeDir: string;
@@ -57,53 +61,37 @@ export class PluginManager {
     let originalSource: string;
     let sourceType: PluginSource;
     let parsed: ParsedManifestResult;
+    let id: string;
 
     if (resolved.kind === 'local-path') {
-      normalizedRoot = await normalizeInstallRoot(resolved.path);
+      const sourceRoot = await normalizeInstallRoot(resolved.path);
       originalSource = resolved.path;
       sourceType = 'local-path';
+      parsed = await parseManifest(sourceRoot);
+      if (parsed.manifest === undefined) {
+        const msg = parsed.diagnostics.find((d) => d.severity === 'error')?.message ?? 'no manifest';
+        throw new Error(`Cannot install plugin at ${sourceRoot}: ${msg}`);
+      }
+      id = normalizePluginId(parsed.manifest.name);
+      normalizedRoot = await copyPluginToManagedRoot(this.kimiHomeDir, id, sourceRoot);
       parsed = await parseManifest(normalizedRoot);
     } else {
       // zip-url
       const buffer = await downloadZip(resolved.path);
       const tmpDir = await mkdtemp(path.join(tmpdir(), 'kimi-plugin-zip-'));
-      let detectedRoot: string;
       try {
-        detectedRoot = await extractZip(buffer, tmpDir);
-      } catch (error) {
-        await rm(tmpDir, { recursive: true, force: true });
-        throw error;
-      }
-      parsed = await parseManifest(detectedRoot);
-      if (parsed.manifest === undefined) {
-        await rm(tmpDir, { recursive: true, force: true });
-        const msg = parsed.diagnostics.find((d) => d.severity === 'error')?.message ?? 'no manifest';
-        throw new Error(`Cannot install plugin from ${resolved.path}: ${msg}`);
-      }
-      const id = normalizePluginId(parsed.manifest.name);
-      const existing = this.records.get(id);
-      if (existing !== undefined) {
-        if (existing.source === 'local-path') {
-          await rm(tmpDir, { recursive: true, force: true });
-          throw new Error(`Plugin "${id}" is already installed from a local directory. Remove it first.`);
+        const detectedRoot = await extractZip(buffer, tmpDir);
+        parsed = await parseManifest(detectedRoot);
+        if (parsed.manifest === undefined) {
+          const msg = parsed.diagnostics.find((d) => d.severity === 'error')?.message ?? 'no manifest';
+          throw new Error(`Cannot install plugin from ${resolved.path}: ${msg}`);
         }
+        id = normalizePluginId(parsed.manifest.name);
+        normalizedRoot = await copyPluginToManagedRoot(this.kimiHomeDir, id, detectedRoot);
+        parsed = await parseManifest(normalizedRoot);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
       }
-      normalizedRoot = path.join(this.kimiHomeDir, 'plugins', 'managed', id);
-      const managedDir = path.dirname(normalizedRoot);
-      await mkdir(managedDir, { recursive: true });
-      const stagingRoot = await mkdtemp(path.join(managedDir, `${id}-`));
-      try {
-        await cp(detectedRoot, stagingRoot, { recursive: true });
-        await rm(normalizedRoot, { recursive: true, force: true });
-        await rename(stagingRoot, normalizedRoot);
-      } catch (error) {
-        await rm(stagingRoot, { recursive: true, force: true });
-        throw error;
-      }
-      if (existing !== undefined) this.records.delete(id);
-      normalizedRoot = await realpath(normalizedRoot);
-      parsed = await parseManifest(normalizedRoot);
-      await rm(tmpDir, { recursive: true, force: true });
       originalSource = resolved.path;
       sourceType = 'zip-url';
     }
@@ -112,19 +100,18 @@ export class PluginManager {
       const msg = parsed.diagnostics.find((d) => d.severity === 'error')?.message ?? 'no manifest';
       throw new Error(`Cannot install plugin at ${normalizedRoot}: ${msg}`);
     }
-    const id = normalizePluginId(parsed.manifest.name);
-    if (this.records.has(id)) {
-      throw new Error(`Plugin "${id}" is already installed`);
-    }
+    id = normalizePluginId(parsed.manifest.name);
+    const existing = this.records.get(id);
     const now = new Date().toISOString();
     const record = recordFrom({
       id,
       root: normalizedRoot,
-      enabled: true,
-      installedAt: now,
+      enabled: existing?.enabled ?? true,
+      installedAt: existing?.installedAt ?? now,
       updatedAt: now,
       originalSource,
       source: sourceType,
+      capabilities: existing?.capabilities,
       parsed,
     });
     this.records.set(id, record);
@@ -226,13 +213,35 @@ export class PluginManager {
     return out;
   }
 
+  enabledTools(): readonly EnabledPluginTool[] {
+    const out: EnabledPluginTool[] = [];
+    for (const record of this.records.values()) {
+      if (!record.enabled || record.state !== 'ok' || record.manifest === undefined) continue;
+      for (const tool of record.manifest.tools ?? []) {
+        out.push({
+          pluginId: record.id,
+          pluginRoot: record.root,
+          kimiHomeDir: this.kimiHomeDir,
+          name: tool.name,
+          runtimeName: pluginToolRuntimeName(record.id, tool.name),
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          run: tool.run,
+          stdin: tool.stdin ?? 'json',
+          timeoutMs: tool.timeoutMs ?? 120_000,
+        });
+      }
+    }
+    return out;
+  }
+
   enabledMcpServers(): Record<string, McpServerConfig> {
     const out: Record<string, McpServerConfig> = {};
     for (const record of this.records.values()) {
       if (!record.enabled || record.state !== 'ok' || record.manifest === undefined) continue;
       for (const [name, config] of Object.entries(record.manifest.mcpServers ?? {})) {
         if (!isMcpServerEnabled(record, name)) continue;
-        out[pluginMcpRuntimeName(record.id, name)] = config;
+        out[pluginMcpRuntimeName(record.id, name)] = withPluginMcpEnv(config, this.kimiHomeDir);
       }
     }
     return out;
@@ -295,6 +304,26 @@ async function normalizeInstallRoot(rootPath: string): Promise<string> {
   return resolved;
 }
 
+async function copyPluginToManagedRoot(
+  kimiHomeDir: string,
+  id: string,
+  sourceRoot: string,
+): Promise<string> {
+  const managedRoot = path.join(kimiHomeDir, 'plugins', 'managed', id);
+  const managedDir = path.dirname(managedRoot);
+  await mkdir(managedDir, { recursive: true });
+  const stagingRoot = await mkdtemp(path.join(managedDir, `${id}-`));
+  try {
+    await cp(sourceRoot, stagingRoot, { recursive: true });
+    await rm(managedRoot, { recursive: true, force: true });
+    await rename(stagingRoot, managedRoot);
+  } catch (error) {
+    await rm(stagingRoot, { recursive: true, force: true });
+    throw error;
+  }
+  return realpath(managedRoot);
+}
+
 function recordFrom(input: {
   id: string;
   root: string;
@@ -337,6 +366,7 @@ function recordToSummary(record: PluginRecord): PluginSummary {
     enabled: record.enabled,
     state: record.state,
     skillCount: record.manifest?.skills?.length ?? 0,
+    toolCount: record.manifest?.tools?.length ?? 0,
     mcpServerCount: Object.keys(record.manifest?.mcpServers ?? {}).length,
     enabledMcpServerCount: pluginMcpServersInfo(record).filter((server) => server.enabled).length,
     hasErrors: record.diagnostics.some((d) => d.severity === 'error'),
@@ -352,6 +382,7 @@ function recordToInfo(record: PluginRecord): PluginInfo {
     manifestKind: record.manifestKind,
     manifestPath: record.manifestPath,
     manifest: record.manifest,
+    tools: pluginToolsInfo(record),
     mcpServers: pluginMcpServersInfo(record),
     shadowedManifestPath: record.shadowedManifestPath,
     diagnostics: record.diagnostics,
@@ -366,6 +397,25 @@ function pluginMcpServersInfo(record: PluginRecord): readonly PluginMcpServerInf
   return Object.entries(record.manifest?.mcpServers ?? {})
     .map(([name, config]) => pluginMcpServerInfo(record, name, config))
     .toSorted((a, b) => a.name.localeCompare(b.name));
+}
+
+function pluginToolsInfo(record: PluginRecord): readonly PluginToolInfo[] {
+  return (record.manifest?.tools ?? [])
+    .map((tool) => ({
+      name: tool.name,
+      runtimeName: pluginToolRuntimeName(record.id, tool.name),
+      description: tool.description,
+      run: tool.run,
+      command: pluginToolDisplayCommand(tool.run),
+      args: tool.run.args,
+      stdin: tool.stdin ?? 'json',
+      timeoutMs: tool.timeoutMs ?? 120_000,
+    }))
+    .toSorted((a, b) => a.name.localeCompare(b.name));
+}
+
+function pluginToolDisplayCommand(run: PluginToolInfo['run']): string {
+  return run.type === 'node' ? run.entry : run.command;
 }
 
 function pluginMcpServerInfo(
@@ -397,4 +447,32 @@ function pluginMcpServerInfo(
 
 function pluginMcpRuntimeName(pluginId: string, serverName: string): string {
   return `plugin-${pluginId}-${serverName}`;
+}
+
+function pluginToolRuntimeName(pluginId: string, toolName: string): string {
+  const full = `plugin__${pluginId}__${toolName}`;
+  if (full.length <= MAX_PLUGIN_TOOL_NAME_LENGTH) return full;
+  const hash = stableHash8(full);
+  const head = full.slice(0, MAX_PLUGIN_TOOL_NAME_LENGTH - hash.length - 1);
+  return `${head}_${hash}`;
+}
+
+function withPluginMcpEnv(config: McpServerConfig, kimiHomeDir: string): McpServerConfig {
+  if (config.transport === 'http') return config;
+  return {
+    ...config,
+    env: {
+      ...config.env,
+      KIMI_CODE_HOME: kimiHomeDir,
+    },
+  };
+}
+
+function stableHash8(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.codePointAt(i)!;
+    hash = Math.trunc(Math.imul(hash, 0x01000193));
+  }
+  return hash.toString(16).padStart(8, '0');
 }
