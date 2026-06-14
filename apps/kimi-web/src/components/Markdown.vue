@@ -351,6 +351,21 @@ function copyDiff(code: string, idx: number) {
   color: var(--text);
   font-weight: 500;
 }
+.md :deep(.markstream-vue),
+.md :deep(.markdown-renderer) {
+  --code-bg: var(--panel);
+  --code-fg: var(--text);
+  --code-border: var(--line);
+  --code-header-bg: var(--panel2);
+  --code-action-fg: var(--muted);
+  --code-action-hover-fg: var(--blue);
+  --markstream-code-fallback-bg: var(--panel);
+  --markstream-code-fallback-fg: var(--text);
+  --markstream-code-border-color: var(--line);
+  --inline-code-bg: var(--panel2);
+  --inline-code-fg: var(--blue2);
+  --inline-code-border: var(--line);
+}
 .md :deep(.md-file-link) {
   appearance: none;
   display: inline;
@@ -475,10 +490,17 @@ function copyDiff(code: string, idx: number) {
 .md :deep(.code-block-container pre code) {
   font-family: var(--mono);
   font-size: var(--ui-font-size);
+  color: var(--text);
   background: none;
   border: none;
   padding: 0;
   border-radius: 0;
+}
+.md :deep(.markstream-pre),
+.md :deep(.code-pre-fallback),
+.md :deep(.code-block-content pre:not(.shiki)),
+.md :deep(.code-block-content pre:not(.shiki) code) {
+  color: var(--text);
 }
 
 /* Links — open in a new tab (markstream handles target/rel) */
