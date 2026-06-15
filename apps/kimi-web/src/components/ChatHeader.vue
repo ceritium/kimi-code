@@ -41,7 +41,6 @@ const emit = defineEmits<{
 
 const ahead = computed(() => props.ahead ?? 0);
 const behind = computed(() => props.behind ?? 0);
-const changes = computed(() => props.changesCount ?? 0);
 const adds = computed(() => props.gitDiffStats?.totalAdditions ?? 0);
 const dels = computed(() => props.gitDiffStats?.totalDeletions ?? 0);
 const hasLineStats = computed(() => adds.value > 0 || dels.value > 0);
