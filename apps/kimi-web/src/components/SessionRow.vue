@@ -130,7 +130,7 @@ defineExpose({ closeMenu, cancelDelete });
           fill="none"
         >
           <circle class="run-track" cx="8" cy="8" r="6" stroke-width="2" />
-          <path class="run-arc" d="M8 2 a6 6 0 0 1 6 6" stroke-width="2" stroke-linecap="round" />
+          <path class="run-arc" d="M8 2 A6 6 0 1 1 2 8" stroke-width="2" stroke-linecap="round" />
         </svg>
         <span v-else-if="unread" class="unread-dot" />
       </span>
