@@ -1516,10 +1516,8 @@ onUnmounted(() => {
             <circle cx="8" cy="8" r="5.5" />
             <path d="M8 4.5V8l2.5 1.5" />
           </svg>
-          <span v-if="bashRunning > 0" class="dock-work-pulse" aria-hidden="true"></span>
           <span>{{ t('tasks.dockBash') }}</span>
-          <b>{{ bashTasks.length }}</b>
-          <span v-if="bashRunning > 0" class="dock-work-muted">{{ bashRunning }} {{ t('tasks.running') }}</span>
+          <span class="dw-count">(<b>{{ bashTasks.length }}</b>)</span>
         </button>
         <button
           v-if="subagentTasks.length > 0"
@@ -1529,14 +1527,11 @@ onUnmounted(() => {
           :aria-pressed="dockPanel === 'subagent'"
           @click="toggleDockPanel('subagent')"
         >
-          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-            <circle cx="8" cy="8" r="5.5" />
-            <path d="M8 4.5V8l2.5 1.5" />
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 2l1.5 4.5L14 8l-4.5 1.5L8 14l-1.5-4.5L2 8l4.5-1.5z" />
           </svg>
-          <span v-if="subagentRunning > 0" class="dock-work-pulse" aria-hidden="true"></span>
           <span>{{ t('tasks.dockSubagent') }}</span>
-          <b>{{ subagentTasks.length }}</b>
-          <span v-if="subagentRunning > 0" class="dock-work-muted">{{ subagentRunning }} {{ t('tasks.running') }}</span>
+          <span class="dw-count">(<b>{{ subagentTasks.length }}</b>)</span>
         </button>
         <button
           v-if="(todos?.length ?? 0) > 0"
@@ -1553,7 +1548,7 @@ onUnmounted(() => {
             <path d="M8.5 11.5h4" />
           </svg>
           <span>{{ t('tasks.dockTodos') }}</span>
-          <b>{{ todoDoneCount }}/{{ todos?.length ?? 0 }}</b>
+          <span class="dw-count">(<b>{{ todoDoneCount }}/{{ todos?.length ?? 0 }}</b>)</span>
         </button>
       </div>
       <!-- A pending question or approval replaces the Composer here — both are
@@ -2021,22 +2016,9 @@ onUnmounted(() => {
   color: var(--ink);
   font-weight: 600;
 }
-.dock-work-muted {
-  color: var(--blue2);
-  white-space: nowrap;
-}
-.dock-work-pulse {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--blue);
-  animation: dock-pulse 1.7s infinite;
-}
-@keyframes dock-pulse {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--blue) 55%, transparent); }
-  70% { box-shadow: 0 0 0 5px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
+.dock-work-chip .dw-count {
+  font-family: var(--sans);
+  letter-spacing: -0.02em;
 }
 .dock-work-panel {
   position: absolute;
