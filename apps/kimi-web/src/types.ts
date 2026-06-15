@@ -158,11 +158,13 @@ export interface ChatTurn {
   approval?: ApprovalBlock;
   approvalId?: string; // daemon approval id — present when approval needs a decision
   /** Image attachments sent by the user (rendered above the text bubble). */
-  images?: { url: string; alt?: string }[];
+  images?: { url: string; alt?: string; kind: 'image' | 'video' }[];
   /** Compaction divider data (role 'compaction'): the transcript keeps all
       prior turns and renders this as a separator line; `text` holds the
       LLM-generated summary, opened in the right-side panel on click. */
   compaction?: { trigger?: 'manual' | 'auto'; tokensBefore?: number; tokensAfter?: number };
+  /** ISO timestamp when the message was created (used for the user bubble timestamp). */
+  createdAt?: string;
   /** Skill activation metadata: when a user turn was triggered by a slash
       command (/skill), this holds the skill name and args for display. */
   skillActivation?: { name: string; args?: string };

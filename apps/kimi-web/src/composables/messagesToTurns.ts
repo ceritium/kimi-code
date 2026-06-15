@@ -565,15 +565,19 @@ export function messagesToTurns(
     }
   }
 
-  function resolveImageUrl(c: AppMessage['content'][number]): string | undefined {
-    if (c.type === 'image') {
+  function resolveMediaUrl(
+    c: AppMessage['content'][number],
+  ): { url: string; kind: 'image' | 'video' } | undefined {
+    if (c.type === 'image' || c.type === 'video') {
+      const kind = c.type;
       const src = c.source;
-      if (src.kind === 'url') return src.url;
-      if (src.kind === 'base64') return `data:${src.mediaType};base64,${src.data}`;
-      if (src.kind === 'file' && getFileUrl) return getFileUrl(src.fileId);
+      if (src.kind === 'url') return { url: src.url, kind };
+      if (src.kind === 'base64') return { url: `data:${src.mediaType};base64,${src.data}`, kind };
+      if (src.kind === 'file' && getFileUrl) return { url: getFileUrl(src.fileId), kind };
     }
-    if (c.type === 'file' && getFileUrl && c.mediaType.startsWith('image/')) {
-      return getFileUrl(c.fileId);
+    if (c.type === 'file' && getFileUrl) {
+      if (c.mediaType.startsWith('image/')) return { url: getFileUrl(c.fileId), kind: 'image' };
+      if (c.mediaType.startsWith('video/')) return { url: getFileUrl(c.fileId), kind: 'video' };
     }
     return undefined;
   }
@@ -619,7 +623,7 @@ export function messagesToTurns(
         origin?.kind === 'skill_activation' && origin?.trigger === 'user-slash';
 
       const textParts: string[] = [];
-      const images: { url: string; alt?: string }[] = [];
+      const images: { url: string; alt?: string; kind: 'image' | 'video' }[] = [];
       for (const c of msg.content) {
         if (c.type === 'text') {
           if (isSkillActivation) {
@@ -630,8 +634,8 @@ export function messagesToTurns(
             textParts.push(c.text);
           }
         }
-        const url = resolveImageUrl(c);
-        if (url) images.push({ url, alt: c.type === 'file' ? c.name : undefined });
+        const media = resolveMediaUrl(c);
+        if (media) images.push({ url: media.url, kind: media.kind, alt: c.type === 'file' ? c.name : undefined });
       }
       turns.push({
         id: msg.id,
@@ -642,6 +646,7 @@ export function messagesToTurns(
         skillActivation: isSkillActivation
           ? { name: origin.skillName!, args: origin.skillArgs }
           : undefined,
+        createdAt: msg.createdAt,
       });
       continue;
     }
