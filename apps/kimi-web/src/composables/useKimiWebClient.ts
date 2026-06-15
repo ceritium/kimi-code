@@ -1351,6 +1351,28 @@ function formatTime(iso: string, _status: string): string {
   }
 }
 
+const SESSION_TIME_CLOCK_INTERVAL_MS = 30_000;
+const sessionTimeClock = ref(0);
+let sessionTimeClockTimer: ReturnType<typeof setInterval> | null = null;
+
+function ensureSessionTimeClock(): void {
+  if (sessionTimeClockTimer !== null) return;
+  sessionTimeClockTimer = setInterval(() => {
+    sessionTimeClock.value = (sessionTimeClock.value + 1) % Number.MAX_SAFE_INTEGER;
+  }, SESSION_TIME_CLOCK_INTERVAL_MS);
+  (sessionTimeClockTimer as { unref?: () => void }).unref?.();
+}
+
+function stopSessionTimeClock(): void {
+  if (sessionTimeClockTimer === null) return;
+  clearInterval(sessionTimeClockTimer);
+  sessionTimeClockTimer = null;
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(stopSessionTimeClock);
+}
+
 /** Build DiffLine[] from old_text/new_text strings */
 function buildDiffLines(oldText: string, newText: string): DiffLine[] {
   const removed = oldText.split('\n');
@@ -1578,14 +1600,15 @@ const workspace = computed<Workspace>(() => {
   };
 });
 
-const sessions = computed<Session[]>(() =>
-  rawState.sessions.map((s) => ({
+const sessions = computed<Session[]>(() => {
+  void sessionTimeClock.value;
+  return rawState.sessions.map((s) => ({
     id: s.id,
     title: s.title,
     time: formatTime(s.updatedAt, s.status),
     status: toUiSessionStatus(s.status),
-  })),
-);
+  }));
+});
 
 const activeSessionId = computed<string>(() => rawState.activeSessionId ?? '');
 
@@ -3649,6 +3672,8 @@ async function searchFiles(query: string): Promise<Array<{ path: string; name: s
 // ---------------------------------------------------------------------------
 
 export function useKimiWebClient() {
+  ensureSessionTimeClock();
+
   return {
     // Reactive state / computed view props
     workspace,
