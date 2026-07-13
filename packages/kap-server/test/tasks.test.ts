@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import {
   IAgentLifecycleService,
+  IAgentProfileService,
   IAgentTaskService,
   ISessionLifecycleService,
   ISessionSwarmService,
@@ -346,13 +347,76 @@ describe('server-v2 /api/v1/sessions/{sid}/tasks', () => {
 
     const cancelled = await cancelTask(id, 'agent-swarm');
     expect(cancelled.body).toMatchObject({ code: 0, data: { cancelled: true } });
-    expect(stopAgent).toHaveBeenLastCalledWith({
-      callerAgentId: 'main',
-      agentId: 'agent-swarm',
-    });
+    expect(stopAgent).toHaveBeenLastCalledWith('agent-swarm');
 
     const again = await cancelTask(id, 'agent-swarm');
     expect(again.body).toMatchObject({
+      code: 40904,
+      data: { cancelled: false },
+      details: { current_status: 'cancelled' },
+    });
+  });
+
+  it('cancels through REST when a non-main agent owns the swarm member', async () => {
+    const id = await createSession();
+    const swarm = await sessionSwarm(id);
+    const session = server!.core.accessor.get(ISessionLifecycleService).get(id);
+    if (session === undefined) throw new Error(`session ${id} not found`);
+    const lifecycle = session.accessor.get(IAgentLifecycleService);
+    const caller = await lifecycle.create({ agentId: 'agent-caller' });
+    caller.accessor.get(IAgentProfileService).update({ modelAlias: 'test-model' });
+    await lifecycle.create({
+      agentId: 'agent-owned-child',
+      labels: { parentAgentId: caller.id },
+    });
+
+    let rejectCompletion: (reason?: unknown) => void = () => {};
+    const completion = new Promise<{ summary: string }>((_resolve, reject) => {
+      rejectCompletion = reject;
+    });
+    let runSignal: AbortSignal | undefined;
+    const runAgent = vi.spyOn(lifecycle, 'run').mockImplementation(
+      async (agentId, _request, options) => {
+        runSignal = options.signal;
+        options.signal.addEventListener(
+          'abort',
+          () => {
+            rejectCompletion(options.signal.reason);
+          },
+          { once: true },
+        );
+        options.onReady?.();
+        return { agentId, turn: {} as never, completion };
+      },
+    );
+    const running = swarm.run({
+      callerAgentId: caller.id,
+      tasks: [
+        {
+          kind: 'resume',
+          data: undefined,
+          profileName: 'subagent',
+          parentToolCallId: 'call_non_main_swarm',
+          prompt: 'Continue',
+          description: 'Continue child',
+          runInBackground: false,
+          resumeAgentId: 'agent-owned-child',
+        },
+      ],
+    });
+    await vi.waitFor(() => {
+      expect(runAgent).toHaveBeenCalledOnce();
+    });
+
+    const cancelled = await cancelTask(id, 'agent-owned-child');
+
+    expect(cancelled.body).toMatchObject({ code: 0, data: { cancelled: true } });
+    expect(runSignal?.aborted).toBe(true);
+    await expect(running).resolves.toMatchObject([
+      { agentId: 'agent-owned-child', status: 'aborted' },
+    ]);
+    const repeated = await cancelTask(id, 'agent-owned-child');
+    expect(repeated.body).toMatchObject({
       code: 40904,
       data: { cancelled: false },
       details: { current_status: 'cancelled' },
@@ -378,10 +442,7 @@ describe('server-v2 /api/v1/sessions/{sid}/tasks', () => {
     const cancelled = await cancelTask(id, 'agent-resumed');
 
     expect(cancelled.body).toMatchObject({ code: 0, data: { cancelled: true } });
-    expect(stopAgent).toHaveBeenCalledWith({
-      callerAgentId: 'main',
-      agentId: 'agent-resumed',
-    });
+    expect(stopAgent).toHaveBeenCalledWith('agent-resumed');
   });
 
   it('reports an exact terminal task id before a matching active swarm member', async () => {

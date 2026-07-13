@@ -1453,7 +1453,7 @@ describe('AgentSwarm tool execution contract', () => {
       _serviceBrand: undefined,
       getSwarmItem: async () => undefined,
       run: runSwarm as ISessionSwarmService['run'],
-      stopAgent: ({ agentId }) => ({ kind: 'not_found', agentId }),
+      stopAgent: (agentId) => ({ kind: 'not_found', agentId }),
       cancel: () => {},
     };
     ctx = createTestAgent(swarmServices(swarmService));
@@ -1535,7 +1535,7 @@ describe('AgentSwarm tool execution contract', () => {
       _serviceBrand: undefined,
       getSwarmItem,
       run: runSwarm as ISessionSwarmService['run'],
-      stopAgent: ({ agentId }) => ({ kind: 'not_found', agentId }),
+      stopAgent: (agentId) => ({ kind: 'not_found', agentId }),
       cancel: () => {},
     };
     ctx = createTestAgent(swarmServices(swarmService));
@@ -1661,7 +1661,7 @@ describe('AgentSwarm tool execution contract', () => {
       _serviceBrand: undefined,
       getSwarmItem: async () => undefined,
       run: runSwarm as ISessionSwarmService['run'],
-      stopAgent: ({ agentId }) => ({ kind: 'not_found', agentId }),
+      stopAgent: (agentId) => ({ kind: 'not_found', agentId }),
       cancel: () => {},
     };
     ctx = createTestAgent(swarmServices(swarmService));
@@ -1709,7 +1709,7 @@ describe('AgentSwarm tool execution contract', () => {
       _serviceBrand: undefined,
       getSwarmItem: async () => undefined,
       run: runSwarm as ISessionSwarmService['run'],
-      stopAgent: ({ agentId }) => ({ kind: 'not_found', agentId }),
+      stopAgent: (agentId) => ({ kind: 'not_found', agentId }),
       cancel: () => {},
     };
     ctx = createTestAgent(swarmServices(swarmService));
@@ -1766,7 +1766,7 @@ describe('AgentSwarm tool execution contract', () => {
       _serviceBrand: undefined,
       getSwarmItem: async () => undefined,
       run: runSwarm as ISessionSwarmService['run'],
-      stopAgent: ({ agentId }) => ({ kind: 'not_found', agentId }),
+      stopAgent: (agentId) => ({ kind: 'not_found', agentId }),
       cancel: () => {},
     };
     ctx = createTestAgent(swarmServices(swarmService));

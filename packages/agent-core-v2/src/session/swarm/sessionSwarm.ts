@@ -79,10 +79,7 @@ export interface ISessionSwarmService {
     readonly agentId: string;
   }): Promise<string | undefined>;
   run<T>(args: SessionSwarmRunArgs<T>): Promise<readonly SessionSwarmRunResult<T>[]>;
-  stopAgent(args: {
-    readonly callerAgentId: string;
-    readonly agentId: string;
-  }): SessionSwarmStopResult;
+  stopAgent(agentId: string): SessionSwarmStopResult;
   cancel(args: { readonly callerAgentId: string }): void;
 }
 

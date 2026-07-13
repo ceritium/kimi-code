@@ -1070,9 +1070,13 @@ describe('SessionSwarmService metadata compatibility', () => {
         throw new Error(`Unexpected swarm run for ${agentId}`);
       }
       signals.set(agentId, signal);
-      signal.addEventListener('abort', () => completion.reject(signal.reason), {
-        once: true,
-      });
+      signal.addEventListener(
+        'abort',
+        () => {
+          completion.reject(signal.reason);
+        },
+        { once: true },
+      );
       options.onReady?.();
       if (signals.size === agentIds.length) started.resolve();
       return { agentId, turn: {} as never, completion };
@@ -1361,7 +1365,7 @@ describe('SessionSwarmService metadata compatibility', () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(
-        service.stopAgent({ callerAgentId: 'main', agentId: 'agent-rate-limited' }),
+        service.stopAgent('agent-rate-limited'),
       ).toMatchObject({ kind: 'stopped' });
       expect(published).toContainEqual(
         expect.objectContaining({
@@ -1388,7 +1392,9 @@ describe('SessionSwarmService metadata compatibility', () => {
       options?.onReady?.();
       options?.signal.addEventListener(
         'abort',
-        () => completion.reject(options.signal.reason),
+        () => {
+          completion.reject(options.signal.reason);
+        },
         { once: true },
       );
       return { agentId, turn: {} as never, completion };
@@ -1398,9 +1404,11 @@ describe('SessionSwarmService metadata compatibility', () => {
       callerAgentId: 'main',
       tasks: [spawnSessionTask('src/a.ts')],
     });
-    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledOnce());
+    await vi.waitFor(() => {
+      expect(runAgent).toHaveBeenCalledOnce();
+    });
 
-    expect(service.stopAgent({ callerAgentId: 'main', agentId: 'agent-new' })).toEqual({
+    expect(service.stopAgent('agent-new')).toEqual({
       kind: 'stopping',
       agentId: 'agent-new',
     });
@@ -1408,7 +1416,7 @@ describe('SessionSwarmService metadata compatibility', () => {
       { agentId: 'agent-new', status: 'aborted', state: 'started' },
     ]);
 
-    expect(service.stopAgent({ callerAgentId: 'main', agentId: 'agent-new' })).toEqual({
+    expect(service.stopAgent('agent-new')).toEqual({
       kind: 'already_terminal',
       agentId: 'agent-new',
       status: 'aborted',
@@ -1430,7 +1438,7 @@ describe('SessionSwarmService metadata compatibility', () => {
     await runs.started;
 
     expect(
-      service.stopAgent({ callerAgentId: 'main', agentId: 'agent-first-batch' }),
+      service.stopAgent('agent-first-batch'),
     ).toEqual({
       kind: 'stopping',
       agentId: 'agent-first-batch',
@@ -1474,7 +1482,7 @@ describe('SessionSwarmService metadata compatibility', () => {
       },
     ]);
     expect(runAgent).toHaveBeenCalledOnce();
-    expect(service.stopAgent({ callerAgentId: 'main', agentId: 'agent-shared' })).toEqual({
+    expect(service.stopAgent('agent-shared')).toEqual({
       kind: 'stopping',
       agentId: 'agent-shared',
     });
@@ -1553,10 +1561,10 @@ describe('SessionSwarmService metadata compatibility', () => {
     }
 
     expect(
-      service.stopAgent({ callerAgentId: 'main', agentId: 'agent-terminal-0' }),
+      service.stopAgent('agent-terminal-0'),
     ).toEqual({ kind: 'not_found', agentId: 'agent-terminal-0' });
     expect(
-      service.stopAgent({ callerAgentId: 'main', agentId: 'agent-terminal-128' }),
+      service.stopAgent('agent-terminal-128'),
     ).toEqual({
       kind: 'already_terminal',
       agentId: 'agent-terminal-128',
@@ -1576,7 +1584,7 @@ describe('SessionSwarmService metadata compatibility', () => {
       });
     }
     expect(
-      service.stopAgent({ callerAgentId: 'main', agentId: 'agent-lru-0' }),
+      service.stopAgent('agent-lru-0'),
     ).toEqual({
       kind: 'already_terminal',
       agentId: 'agent-lru-0',
@@ -1589,10 +1597,10 @@ describe('SessionSwarmService metadata compatibility', () => {
     });
 
     expect(
-      service.stopAgent({ callerAgentId: 'main', agentId: 'agent-lru-1' }),
+      service.stopAgent('agent-lru-1'),
     ).toEqual({ kind: 'not_found', agentId: 'agent-lru-1' });
     expect(
-      service.stopAgent({ callerAgentId: 'main', agentId: 'agent-lru-0' }),
+      service.stopAgent('agent-lru-0'),
     ).toEqual({
       kind: 'already_terminal',
       agentId: 'agent-lru-0',
@@ -1600,31 +1608,47 @@ describe('SessionSwarmService metadata compatibility', () => {
     });
   });
 
-  it('does not stop an in-flight member owned by another caller', async () => {
+  it('stops an in-flight member through its recorded caller ownership', async () => {
     const completion = createControlledPromise<{ summary: string }>();
     let runSignal: AbortSignal | undefined;
+    const otherEventBus = eventBusStub();
+    handles.set('other', agentHandle('other', lifecycle, otherEventBus));
     runAgent.mockImplementation((agentId, _request, options) => {
       runSignal = options?.signal;
+      options?.signal.addEventListener(
+        'abort',
+        () => {
+          completion.reject(options.signal.reason);
+        },
+        { once: true },
+      );
       options?.onReady?.();
       return { agentId, turn: {} as never, completion };
     });
     const service = ix.get(ISessionSwarmService);
     const running = service.run({
-      callerAgentId: 'main',
+      callerAgentId: 'other',
       tasks: [spawnSessionTask('src/a.ts')],
     });
-    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledOnce());
+    await vi.waitFor(() => {
+      expect(runAgent).toHaveBeenCalledOnce();
+    });
 
-    expect(service.stopAgent({ callerAgentId: 'other', agentId: 'agent-new' })).toEqual({
-      kind: 'not_found',
+    expect(service.stopAgent('agent-new')).toEqual({
+      kind: 'stopping',
       agentId: 'agent-new',
     });
-    expect(runSignal?.aborted).toBe(false);
-
-    completion.resolve({ summary: 'child summary' });
+    expect(runSignal?.aborted).toBe(true);
     await expect(running).resolves.toMatchObject([
-      { agentId: 'agent-new', status: 'completed' },
+      { agentId: 'agent-new', status: 'aborted' },
     ]);
+    expect(otherEventBus.publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'subagent.failed',
+        subagentId: 'agent-new',
+        cancelled: true,
+      }),
+    );
   });
 
   it('rejects resume of an already running child before launching or emitting spawned', async () => {
@@ -1844,7 +1868,7 @@ function createMockAgentRunBatchRunner(
   readonly stopAgent: (agentId: string) => SessionSwarmStopResult;
 } {
   const attempts: MockAgentRunAttemptRecord[] = [];
-  let activeTasks: readonly QueuedAgentRunTask<unknown>[] = [];
+  let activeTasks: readonly QueuedAgentRunTask[] = [];
   let activeBatch: AgentRunBatch<unknown> | undefined;
 
   const createHandle = <T,>(
@@ -1914,7 +1938,7 @@ function createMockAgentRunBatchRunner(
 }
 
 function findMockAgentRunTask<T>(
-  tasks: readonly QueuedAgentRunTask<unknown>[],
+  tasks: readonly QueuedAgentRunTask[],
   options: AgentRunAttemptOptions,
 ): QueuedAgentRunTask<T> {
   const task = tasks.find(
@@ -1928,7 +1952,7 @@ function findMockAgentRunTask<T>(
   return task as QueuedAgentRunTask<T>;
 }
 
-function mockAgentRunId(task: QueuedAgentRunTask<unknown>, attemptIndex: number): string {
+function mockAgentRunId(task: QueuedAgentRunTask, attemptIndex: number): string {
   if (typeof task.data === 'number') return `agent-${String(task.data)}`;
   return `agent-${String(attemptIndex + 1)}`;
 }

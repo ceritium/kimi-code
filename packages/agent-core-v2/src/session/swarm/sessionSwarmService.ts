@@ -4,8 +4,9 @@
  * Runs a batch of agents on behalf of a caller agent: builds an
  * `AgentRunBatchLauncher` on top of the `agentLifecycle` primitives
  * (`create({ binding })`, `run`), drives the internal `AgentRunBatch`
- * scheduler, and tracks each caller's live batches so cancellation can target
- * one member or all work owned by the caller. The caller ↔ child association
+ * scheduler, and tracks each caller's live batches plus each active member's
+ * owning batch so cancellation can target one member or all work owned by the
+ * caller. The caller ↔ child association
  * is this domain's own business data: requester-side display facts
  * (`subagent.spawned` wire signals carrying the swarm's tool-call context,
  * `subagent.suspended` when a task is
@@ -76,20 +77,17 @@ const RESUMED_PROFILE_FALLBACK = 'subagent';
 const RECENT_SWARM_TERMINAL_LIMIT = 128;
 
 type InFlightBatch = {
+  readonly callerAgentId: string;
   readonly controller: AbortController;
   readonly batch: Pick<AgentRunBatch<unknown>, 'stopAgent'>;
   readonly agentIds: Set<string>;
 };
 
-type CallerInFlight = {
-  readonly batches: Set<InFlightBatch>;
-  readonly byAgentId: Map<string, InFlightBatch>;
-};
-
 export class SessionSwarmService implements ISessionSwarmService {
   declare readonly _serviceBrand: undefined;
 
-  private readonly inFlightByCaller = new Map<string, CallerInFlight>();
+  private readonly inFlightByCaller = new Map<string, Set<InFlightBatch>>();
+  private readonly inFlightByAgentId = new Map<string, InFlightBatch>();
   private readonly recentTerminalStatuses = new Map<
     string,
     SessionSwarmRunResult['status']
@@ -140,18 +138,18 @@ export class SessionSwarmService implements ISessionSwarmService {
     };
     const maxConcurrency = resolveSwarmMaxConcurrency();
     const batch = new AgentRunBatch(launcher, linkedTasks, { maxConcurrency });
-    inFlight = { controller, batch, agentIds: new Set() };
-    this.addInFlight(callerAgentId, inFlight);
+    inFlight = { callerAgentId, controller, batch, agentIds: new Set() };
+    this.addInFlight(inFlight);
     const promise = batch.run();
     const cleanup = () => {
       for (const unlink of unlinks) unlink();
-      this.removeInFlight(callerAgentId, inFlight);
+      this.removeInFlight(inFlight);
     };
     void promise.then(
       (results) => {
         for (const result of results) {
           if (result.agentId === undefined) continue;
-          this.rememberTerminal(callerAgentId, result.agentId, result.status);
+          this.rememberTerminal(result.agentId, result.status);
         }
         cleanup();
       },
@@ -162,40 +160,36 @@ export class SessionSwarmService implements ISessionSwarmService {
     return promise;
   }
 
-  stopAgent(args: {
-    readonly callerAgentId: string;
-    readonly agentId: string;
-  }): SessionSwarmStopResult {
-    const caller = this.inFlightByCaller.get(args.callerAgentId);
-    const inFlight = caller?.byAgentId.get(args.agentId);
-    const current = inFlight?.batch.stopAgent(args.agentId);
-    if (current !== undefined && current.kind !== 'not_found') {
-      if (current.kind === 'stopped') {
-        const callerHandle = this.lifecycle.getHandle(args.callerAgentId);
-        if (callerHandle !== undefined) {
-          this.publishCancellation(callerHandle, args.agentId);
+  stopAgent(agentId: string): SessionSwarmStopResult {
+    const inFlight = this.inFlightByAgentId.get(agentId);
+    if (inFlight !== undefined) {
+      const current = inFlight.batch.stopAgent(agentId);
+      if (current.kind !== 'not_found') {
+        if (current.kind === 'stopped') {
+          const callerHandle = this.lifecycle.getHandle(inFlight.callerAgentId);
+          if (callerHandle !== undefined) {
+            this.publishCancellation(callerHandle, agentId);
+          }
         }
+        return current;
       }
-      return current;
     }
 
-    const status = this.recentTerminalStatus(
-      this.agentRunKey(args.callerAgentId, args.agentId),
-    );
+    const status = this.recentTerminalStatus(agentId);
     if (status !== undefined) {
       return {
         kind: 'already_terminal',
-        agentId: args.agentId,
+        agentId,
         status,
       };
     }
-    return { kind: 'not_found', agentId: args.agentId };
+    return { kind: 'not_found', agentId };
   }
 
   cancel({ callerAgentId }: { readonly callerAgentId: string }): void {
-    const caller = this.inFlightByCaller.get(callerAgentId);
-    if (caller === undefined) return;
-    for (const inFlight of caller.batches) {
+    const batches = this.inFlightByCaller.get(callerAgentId);
+    if (batches === undefined) return;
+    for (const inFlight of batches) {
       inFlight.controller.abort(userCancellationReason());
     }
   }
@@ -343,17 +337,17 @@ export class SessionSwarmService implements ISessionSwarmService {
     agentId: string,
     options: AgentRunAttemptOptions,
   ): void {
-    const caller = this.inFlightByCaller.get(callerAgentId);
-    if (caller === undefined || !caller.batches.has(inFlight)) {
+    const batches = this.inFlightByCaller.get(callerAgentId);
+    if (batches === undefined || !batches.has(inFlight)) {
       options.signal.throwIfAborted();
       throw new Error('Swarm batch is no longer running');
     }
-    if (caller.byAgentId.has(agentId)) {
+    if (this.inFlightByAgentId.has(agentId)) {
       throw new Error(`Agent instance "${agentId}" is already owned by a running swarm batch`);
     }
-    this.recentTerminalStatuses.delete(this.agentRunKey(callerAgentId, agentId));
+    this.recentTerminalStatuses.delete(agentId);
     inFlight.agentIds.add(agentId);
-    caller.byAgentId.set(agentId, inFlight);
+    this.inFlightByAgentId.set(agentId, inFlight);
     options.onAgentIdentified?.(agentId);
   }
 
@@ -375,39 +369,42 @@ export class SessionSwarmService implements ISessionSwarmService {
     agentId: string,
     signal: AbortSignal,
   ): void {
-    const caller = this.inFlightByCaller.get(callerAgentId);
-    if (caller?.byAgentId.get(agentId) === inFlight) return;
+    if (
+      inFlight.callerAgentId === callerAgentId &&
+      this.inFlightByAgentId.get(agentId) === inFlight
+    ) {
+      return;
+    }
     signal.throwIfAborted();
     throw new Error(`Agent instance "${agentId}" is not owned by this swarm batch`);
   }
 
-  private addInFlight(callerAgentId: string, inFlight: InFlightBatch): void {
-    let caller = this.inFlightByCaller.get(callerAgentId);
-    if (caller === undefined) {
-      caller = { batches: new Set(), byAgentId: new Map() };
-      this.inFlightByCaller.set(callerAgentId, caller);
+  private addInFlight(inFlight: InFlightBatch): void {
+    let batches = this.inFlightByCaller.get(inFlight.callerAgentId);
+    if (batches === undefined) {
+      batches = new Set();
+      this.inFlightByCaller.set(inFlight.callerAgentId, batches);
     }
-    caller.batches.add(inFlight);
+    batches.add(inFlight);
   }
 
-  private removeInFlight(callerAgentId: string, inFlight: InFlightBatch): void {
-    const caller = this.inFlightByCaller.get(callerAgentId);
-    if (caller === undefined) return;
-    caller.batches.delete(inFlight);
+  private removeInFlight(inFlight: InFlightBatch): void {
+    const batches = this.inFlightByCaller.get(inFlight.callerAgentId);
+    batches?.delete(inFlight);
     for (const agentId of inFlight.agentIds) {
-      if (caller.byAgentId.get(agentId) === inFlight) caller.byAgentId.delete(agentId);
+      if (this.inFlightByAgentId.get(agentId) === inFlight) {
+        this.inFlightByAgentId.delete(agentId);
+      }
     }
-    if (caller.batches.size === 0) this.inFlightByCaller.delete(callerAgentId);
+    if (batches?.size === 0) this.inFlightByCaller.delete(inFlight.callerAgentId);
   }
 
   private rememberTerminal(
-    callerAgentId: string,
     agentId: string,
     status: SessionSwarmRunResult['status'],
   ): void {
-    const key = this.agentRunKey(callerAgentId, agentId);
-    this.recentTerminalStatuses.delete(key);
-    this.recentTerminalStatuses.set(key, status);
+    this.recentTerminalStatuses.delete(agentId);
+    this.recentTerminalStatuses.set(agentId, status);
     while (this.recentTerminalStatuses.size > RECENT_SWARM_TERMINAL_LIMIT) {
       const oldest = this.recentTerminalStatuses.keys().next().value;
       if (oldest === undefined) break;
@@ -423,10 +420,6 @@ export class SessionSwarmService implements ISessionSwarmService {
     this.recentTerminalStatuses.delete(key);
     this.recentTerminalStatuses.set(key, status);
     return status;
-  }
-
-  private agentRunKey(callerAgentId: string, agentId: string): string {
-    return `${callerAgentId}\0${agentId}`;
   }
 
   private requireHandle(agentId: string, label: string): IAgentScopeHandle {

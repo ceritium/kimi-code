@@ -63,7 +63,7 @@ import { z } from 'zod';
 
 import { errEnvelope, okEnvelope } from '../envelope';
 import { defineRoute } from '../middleware/defineRoute';
-import { ensureMainAgent, MAIN_AGENT_ID } from '../transport/mainAgent';
+import { ensureMainAgent } from '../transport/mainAgent';
 import { parseActionSuffix } from './action-suffix';
 
 /** Default cap (bytes) for the opt-in output preview on GET-by-id. */
@@ -332,10 +332,7 @@ function resolveCancelTarget(
     return { kind: 'agent_task', task: agentTask };
   }
 
-  const swarmResult = resolved.swarm?.stopAgent({
-    callerAgentId: MAIN_AGENT_ID,
-    agentId: taskOrAgentId,
-  });
+  const swarmResult = resolved.swarm?.stopAgent(taskOrAgentId);
   if (swarmResult !== undefined && swarmResult.kind !== 'not_found') {
     return { kind: 'swarm', result: swarmResult };
   }
