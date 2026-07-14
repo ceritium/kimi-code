@@ -148,10 +148,6 @@ export function resolveThinkingEffortForModel(
   }
 
   if (effort === 'off' && model?.alwaysThinking === true) {
-    // always_thinking forces thinking on, but an explicitly configured effort
-    // is still honored — `enabled = false` only expresses the intent to
-    // disable, it should not also discard a chosen effort. Fall back to the
-    // model default only when no effort is configured.
     effort = configured ?? defaultThinkingEffortForModel(model);
   }
   return normalizeThinkingEffortForModel(effort, model, kimiProvider);

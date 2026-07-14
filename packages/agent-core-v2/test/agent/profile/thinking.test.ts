@@ -47,9 +47,7 @@ describe('defaultThinkingEffortForModel', () => {
   });
 
   it('falls back to the middle supportEfforts entry when defaultEffort is absent', () => {
-    // odd length -> exact middle
     expect(defaultThinkingEffortForModel(effortModel)).toBe('medium');
-    // even length -> upper-middle index
     expect(
       defaultThinkingEffortForModel({
         capabilities: ['thinking'],
@@ -102,9 +100,6 @@ describe('resolveThinkingEffort', () => {
   });
 
   it('honors a configured effort when clamping always-thinking models back on', () => {
-    // enabled=false resolves to 'off', then always_thinking clamps back on;
-    // an explicitly configured effort is preserved instead of falling back to
-    // the model default.
     expect(
       resolveThinkingEffort(
         undefined,
@@ -112,7 +107,6 @@ describe('resolveThinkingEffort', () => {
         alwaysThinkingEffortModel,
       ),
     ).toBe('max');
-    // without an explicit effort, fall back to the model's default effort.
     expect(resolveThinkingEffort(undefined, { enabled: false }, alwaysThinkingEffortModel)).toBe(
       'high',
     );
