@@ -235,14 +235,16 @@ function makeFixture(options?: {
   };
 
   // App scope: lifecycle owns fake session handles; `resume` only knows the
-  // ids this fixture created (mirrors the persisted index).
+  // ids this fixture created (mirrors the persisted index). Like the real
+  // lifecycle, a missing sessionId mints a `session_`-prefixed id.
   const persisted = new Set<string>();
   const lifecycle = {
-    create: (opts: { sessionId: string; workDir: string }) => {
+    create: (opts: { sessionId?: string; workDir: string }) => {
       (calls['lifecycle.create'] ??= []).push([opts]);
       order.push('lifecycle.create');
-      persisted.add(opts.sessionId);
-      return Promise.resolve(makeSessionHandle(opts.sessionId, opts.workDir));
+      const id = opts.sessionId ?? `session_fake-${persisted.size}`;
+      persisted.add(id);
+      return Promise.resolve(makeSessionHandle(id, opts.workDir));
     },
     resume: (id: string) => {
       (calls['lifecycle.resume'] ??= []).push([id]);
@@ -467,6 +469,16 @@ describe('CoreHarness createSession', () => {
       metadata: { origin: 'test' },
       additionalDirs: ['/extra'],
     });
+  });
+
+  it('lets the lifecycle mint the session_ id when none is supplied', async () => {
+    const fx = makeFixture();
+    const session = await fx.harness.createSession({ workDir: '/work' });
+
+    // No fabricated UUID from the facade: the lifecycle receives no id and
+    // mints the canonical session_-prefixed one (v1 parity).
+    expect(fx.calls['lifecycle.create']).toEqual([[{ sessionId: undefined, workDir: '/work' }]]);
+    expect(session.id).toBe('session_fake-0');
   });
 
   it('enters plan mode on the main agent when planMode is set', async () => {

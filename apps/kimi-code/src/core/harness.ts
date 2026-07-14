@@ -11,7 +11,6 @@
  * `createCoreHarness(options)` performs the real bootstrap.
  */
 
-import { randomUUID } from 'node:crypto';
 import { mkdir, open } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
@@ -272,14 +271,18 @@ export class CoreHarness {
   }
 
   async createSession(options: CreateSessionOptions): Promise<CoreSession> {
-    const id = options.id ?? randomUUID();
     const app = this.deps.app.accessor;
     // The workspace must be registered before the session is created —
     // `ISessionLifecycleService.resume` refuses sessions whose workspace is
     // unknown to the registry, so skipping this would make the session
     // impossible to resume later.
     await app.get(IWorkspaceRegistry).createOrTouch(options.workDir);
-    const handle = await app.get(ISessionLifecycleService).create({ sessionId: id, workDir: options.workDir });
+    // Without a caller-supplied id the lifecycle mints the canonical
+    // `session_`-prefixed id (v1 parity); never substitute a bare UUID here.
+    const handle = await app
+      .get(ISessionLifecycleService)
+      .create({ sessionId: options.id, workDir: options.workDir });
+    const id = handle.accessor.get(ISessionContext).sessionId;
     try {
       const main = await ensureMainAgent(handle);
       if (options.model !== undefined) {
