@@ -671,7 +671,12 @@ export class SessionLifecycleService extends Disposable implements ISessionLifec
   private async forkSourceHandle(sessionId: string): Promise<ISessionScopeHandle | undefined> {
     let initialization = this.initializations.get(sessionId);
     while (initialization !== undefined) {
-      await initialization.settled;
+      if (initialization.published && !initialization.closing) {
+        return this.sessions.get(sessionId);
+      }
+      await (initialization.closing
+        ? initialization.settled
+        : initialization.publishedOrSettled);
       initialization = this.initializations.get(sessionId);
     }
     return this.sessions.get(sessionId);

@@ -1902,6 +1902,26 @@ describe('SessionLifecycleService', () => {
       });
     }
 
+    it('allows a published source creation hook to fork the same session', async () => {
+      let forked: ISessionScopeHandle | undefined;
+      const svc = build([workspaceGetStub()]);
+      const hook = svc.hooks.onDidCreateSession.register(
+        'fork-created-source',
+        async (event, next) => {
+          if (event.sessionId === 'src') {
+            forked = await svc.fork({ sourceSessionId: event.sessionId, newSessionId: 'dst' });
+          }
+          await next();
+        },
+      );
+
+      await svc.create({ sessionId: 'src', workDir: '/tmp/proj' });
+
+      expect(forked).toBeDefined();
+      expect(svc.get('dst')).toBe(forked);
+      hook.dispose();
+    });
+
     it('keeps a fork target published when its creation hook fails', async () => {
       const failure = new Error('fork creation hook failed');
       let published: ISessionScopeHandle | undefined;
