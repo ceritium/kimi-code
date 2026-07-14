@@ -1,5 +1,16 @@
+/**
+ * `terminal` lifecycle scenarios — bounded replay and exited-resource ownership.
+ *
+ * Exercises `ISessionTerminalService` and `IHostTerminalService` through DI,
+ * using the real services with only the OS PTY/workspace/session boundaries
+ * replaced. Covers live delivery, replay, exit retention, and App/Session
+ * teardown. Run with `pnpm --filter @moonshot-ai/agent-core-v2 exec vitest run
+ * test/session/terminal/terminalService.test.ts`.
+ */
+
 import { resolve } from 'node:path';
 
+import { spawn } from 'node-pty';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DisposableStore, toDisposable } from '#/_base/di/lifecycle';
@@ -99,7 +110,36 @@ function collectSink(id = 'sink-1'): { sink: TerminalAttachSink; frames: Termina
   return { sink: { id, send: (frame) => frames.push(frame) }, frames };
 }
 
-describe('SessionTerminalService', () => {
+function createMockPty(): {
+  readonly pty: import('node-pty').IPty;
+  readonly dataListeners: Set<(data: string) => void>;
+  readonly exitListeners: Set<(event: { exitCode: number }) => void>;
+  readonly write: ReturnType<typeof vi.fn>;
+  readonly resize: ReturnType<typeof vi.fn>;
+  readonly kill: ReturnType<typeof vi.fn>;
+} {
+  const dataListeners = new Set<(data: string) => void>();
+  const exitListeners = new Set<(event: { exitCode: number }) => void>();
+  const write = vi.fn();
+  const resize = vi.fn();
+  const kill = vi.fn();
+  const pty = {
+    onData: (listener: (data: string) => void) => {
+      dataListeners.add(listener);
+      return toDisposable(() => dataListeners.delete(listener));
+    },
+    onExit: (listener: (event: { exitCode: number }) => void) => {
+      exitListeners.add(listener);
+      return toDisposable(() => exitListeners.delete(listener));
+    },
+    write,
+    resize,
+    kill,
+  } as unknown as import('node-pty').IPty;
+  return { pty, dataListeners, exitListeners, write, resize, kill };
+}
+
+describe('session terminal lifecycle (live I/O, replay, and retention)', () => {
   let disposables: DisposableStore;
   let ix: TestInstantiationService;
   let host: FakeHostTerminalService;
@@ -194,6 +234,66 @@ describe('SessionTerminalService', () => {
     expect(frames.map((f) => (f as { seq?: number }).seq)).toEqual([2, 3]);
   });
 
+  it('replays only complete output frames within the one MiB retention limit', async () => {
+    const svc = ix.get(ISessionTerminalService);
+    const terminal = await svc.create({});
+    const proc = host.processes[0]!;
+    proc.emitData('a'.repeat(716_800));
+    proc.emitData('b'.repeat(409_600));
+
+    const { sink, frames } = collectSink();
+    const result = await svc.attach(terminal.id, sink);
+
+    expect(result).toEqual({ replayed: 1 });
+    expect(frames).toMatchObject([
+      { type: 'terminal_output', seq: 2, payload: { data: 'b'.repeat(409_600) } },
+    ]);
+    expect(
+      frames.reduce(
+        (bytes, frame) =>
+          bytes +
+          (frame.type === 'terminal_output' ? Buffer.byteLength(frame.payload.data) : 0),
+        0,
+      ),
+    ).toBe(409_600);
+  });
+
+  it('replays the UTF-8 tail of a single oversized output frame', async () => {
+    const svc = ix.get(ISessionTerminalService);
+    const terminal = await svc.create({});
+    const proc = host.processes[0]!;
+    proc.emitData(`prefix${'界'.repeat(349_526)}tails`);
+
+    const { sink, frames } = collectSink();
+    const result = await svc.attach(terminal.id, sink);
+
+    expect(result).toEqual({ replayed: 1 });
+    expect(frames).toHaveLength(1);
+    const replayed = frames[0];
+    expect(replayed).toMatchObject({ type: 'terminal_output', seq: 1 });
+    const data = replayed?.type === 'terminal_output' ? replayed.payload.data : '';
+    expect(data.startsWith('界')).toBe(true);
+    expect(data.endsWith('tails')).toBe(true);
+    expect(
+      replayed?.type === 'terminal_output' ? Buffer.byteLength(replayed.payload.data) : 0,
+    ).toBeLessThanOrEqual(1_048_576);
+  });
+
+  it('streams an oversized output frame without truncating live delivery', async () => {
+    const svc = ix.get(ISessionTerminalService);
+    const terminal = await svc.create({});
+    const proc = host.processes[0]!;
+    const { sink, frames } = collectSink();
+    await svc.attach(terminal.id, sink);
+    const output = `prefix${'界'.repeat(349_526)}tails`;
+
+    proc.emitData(output);
+
+    expect(frames).toMatchObject([
+      { type: 'terminal_output', seq: 1, payload: { data: output } },
+    ]);
+  });
+
   it('emits an exit frame and marks the terminal exited on process exit', async () => {
     const svc = ix.get(ISessionTerminalService);
     const terminal = await svc.create({});
@@ -212,6 +312,65 @@ describe('SessionTerminalService', () => {
     const fetched = await svc.get(terminal.id);
     expect(fetched.status).toBe('exited');
     expect(fetched.exit_code).toBe(7);
+  });
+
+  it('replays retained output and the exit frame after process exit', async () => {
+    const svc = ix.get(ISessionTerminalService);
+    const terminal = await svc.create({});
+    const proc = host.processes[0]!;
+    proc.emitData('tail');
+    proc.emitExit(7);
+
+    const { sink, frames } = collectSink();
+    const result = await svc.attach(terminal.id, sink);
+
+    expect(result).toEqual({ replayed: 2 });
+    expect(frames).toMatchObject([
+      { type: 'terminal_output', seq: 1, payload: { data: 'tail' } },
+      { type: 'terminal_exit', payload: { exit_code: 7 } },
+    ]);
+  });
+
+  it('lists at most 16 exited terminals across three waves', async () => {
+    const svc = ix.get(ISessionTerminalService);
+    const terminalIds: string[] = [];
+    const retainedCounts: number[] = [];
+
+    for (let wave = 0; wave < 3; wave += 1) {
+      for (let index = 0; index < 8; index += 1) {
+        const terminal = await svc.create({});
+        terminalIds.push(terminal.id);
+        const proc = host.processes.at(-1)!;
+        proc.emitData('x'.repeat(65_536));
+        proc.emitExit(0);
+      }
+      retainedCounts.push((await svc.list()).length);
+    }
+
+    expect(retainedCounts).toEqual([8, 16, 16]);
+    expect((await svc.list()).map((terminal) => terminal.id)).toEqual(terminalIds.slice(8));
+  });
+
+  it('evicts exited terminals by exit order rather than creation order', async () => {
+    const svc = ix.get(ISessionTerminalService);
+    const terminals = [];
+    for (let index = 0; index < 17; index += 1) {
+      terminals.push(await svc.create({}));
+    }
+    const exitOrder = [...host.processes.slice(1), host.processes[0]!];
+
+    for (const proc of exitOrder) {
+      proc.emitExit(0);
+    }
+
+    const retained = await svc.list();
+    expect(new Set(retained.map((terminal) => terminal.id))).toEqual(
+      new Set([...terminals.slice(2).map((terminal) => terminal.id), terminals[0]!.id]),
+    );
+    await expect(svc.get(terminals[1]!.id)).rejects.toMatchObject({
+      code: ErrorCodes.TERMINAL_NOT_FOUND,
+    });
+    await expect(svc.get(terminals[0]!.id)).resolves.toMatchObject({ status: 'exited' });
   });
 
   it('delegates write and resize to the process', async () => {
@@ -258,15 +417,26 @@ describe('SessionTerminalService', () => {
     disposables.dispose();
     expect(proc.killed).toBe(true);
   });
+
+  it('does not kill an exited process when the service is disposed', async () => {
+    const svc = ix.get(ISessionTerminalService);
+    await svc.create({});
+    const proc = host.processes[0]!;
+    proc.emitExit(0);
+
+    disposables.dispose();
+
+    expect(proc.killed).toBe(false);
+  });
 });
 
-// Sanity check for the App-scoped OS HostTerminalService.
-describe('HostTerminalService (App scope)', () => {
+describe('host terminal lifecycle (PTY forwarding and App ownership)', () => {
   let disposables: DisposableStore;
   let ix: TestInstantiationService;
 
   beforeEach(() => {
     disposables = new DisposableStore();
+    vi.mocked(spawn).mockReset();
     ix = createServices(disposables, {
       additionalServices: (reg) => {
         reg.define(IHostTerminalService, HostTerminalService);
@@ -276,23 +446,8 @@ describe('HostTerminalService (App scope)', () => {
   afterEach(() => disposables.dispose());
 
   it('spawns a PTY through node-pty and forwards events', async () => {
-    const { spawn } = await import('node-pty');
-    const dataListeners = new Set<(data: string) => void>();
-    const exitListeners = new Set<(event: { exitCode: number }) => void>();
-    const mockPty = {
-      onData: (listener: (data: string) => void) => {
-        dataListeners.add(listener);
-        return toDisposable(() => dataListeners.delete(listener));
-      },
-      onExit: (listener: (event: { exitCode: number }) => void) => {
-        exitListeners.add(listener);
-        return toDisposable(() => exitListeners.delete(listener));
-      },
-      write: vi.fn(),
-      resize: vi.fn(),
-      kill: vi.fn(),
-    };
-    vi.mocked(spawn).mockReturnValue(mockPty as unknown as import('node-pty').IPty);
+    const mockPty = createMockPty();
+    vi.mocked(spawn).mockReturnValue(mockPty.pty);
 
     const svc = ix.get(IHostTerminalService);
     const proc = await svc.spawn({ cwd: '/ws', shell: '/bin/sh', cols: 80, rows: 24 });
@@ -309,14 +464,14 @@ describe('HostTerminalService (App scope)', () => {
     proc.onProcessData((data) => {
       receivedData += data;
     });
-    for (const listener of dataListeners) listener('hello');
+    for (const listener of [...mockPty.dataListeners]) listener('hello');
     expect(receivedData).toBe('hello');
 
     let receivedExit: { exitCode: number | null } | undefined;
     proc.onProcessExit((event) => {
       receivedExit = event;
     });
-    for (const listener of exitListeners) listener({ exitCode: 5 });
+    for (const listener of [...mockPty.exitListeners]) listener({ exitCode: 5 });
     expect(receivedExit).toEqual({ exitCode: 5 });
 
     proc.write('ls\n');
@@ -327,5 +482,26 @@ describe('HostTerminalService (App scope)', () => {
 
     proc.kill();
     expect(mockPty.kill).toHaveBeenCalled();
+  });
+
+  it('releases an exited PTY before App disposal without breaking its listeners', async () => {
+    const mockPty = createMockPty();
+    vi.mocked(spawn).mockReturnValue(mockPty.pty);
+    const svc = ix.get(IHostTerminalService);
+    const proc = await svc.spawn({ cwd: '/ws', shell: '/bin/sh', cols: 80, rows: 24 });
+    const output: string[] = [];
+    let exitCode: number | null | undefined;
+    proc.onProcessData((data) => output.push(data));
+    proc.onProcessExit((event) => {
+      exitCode = event.exitCode;
+    });
+
+    for (const listener of [...mockPty.dataListeners]) listener('complete output');
+    for (const listener of [...mockPty.exitListeners]) listener({ exitCode: 0 });
+    disposables.dispose();
+
+    expect(output).toEqual(['complete output']);
+    expect(exitCode).toBe(0);
+    expect(mockPty.kill).not.toHaveBeenCalled();
   });
 });
