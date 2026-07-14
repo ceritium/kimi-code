@@ -5,7 +5,7 @@
  * workspace-centric queries spanning the workspace catalog and the session
  * index. Today it exposes the most recent sessions in a workspace, projected
  * as the session index's `SessionSummary`. Read-only and JSON-in/JSON-out so
- * it is directly exposable on the `/api/v2` transport. App-scoped.
+ * it can be exposed by the server's `/api/v1` compatibility routes. App-scoped.
  */
 
 import { createDecorator, type ServiceIdentifier } from '#/_base/di/instantiation';
@@ -16,7 +16,6 @@ import type { Workspace } from './workspaceRegistry';
 
 export type { SessionSummary };
 
-/** Number of recent sessions returned by `listRecentSessions`. */
 export const RECENT_SESSIONS_LIMIT = 20;
 
 export interface WorkspaceListItem extends Workspace {
@@ -33,11 +32,6 @@ export interface IWorkspaceQueryService {
     options?: { readonly includeArchived?: boolean },
   ): Promise<readonly SessionSummary[]>;
   countActiveSessions(workspaceId: string): Promise<number>;
-  /**
-   * List the `RECENT_SESSIONS_LIMIT` (20) most recent sessions in
-   * `workspaceId`, newest first (by `updatedAt`). Returns an empty array when
-   * the workspace has no sessions or is unknown to the session index.
-   */
   listRecentSessions(workspaceId: string): Promise<readonly SessionSummary[]>;
 }
 

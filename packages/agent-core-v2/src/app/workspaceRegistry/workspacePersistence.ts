@@ -16,7 +16,6 @@ import { createDecorator, type ServiceIdentifier } from '#/_base/di/instantiatio
 
 import type { Workspace } from './workspaceRegistry';
 
-/** On-disk entry shape — v1 `workspaces.json` compatible (ISO timestamps). */
 export interface PersistedWorkspaceEntry {
   readonly root: string;
   readonly name: string;
@@ -24,7 +23,6 @@ export interface PersistedWorkspaceEntry {
   readonly last_opened_at: string;
 }
 
-/** On-disk document shape — v1 `workspaces.json` compatible. */
 export interface PersistedWorkspaceFile {
   readonly version: number;
   readonly workspaces: Record<string, PersistedWorkspaceEntry>;
@@ -41,15 +39,7 @@ export interface WorkspaceCatalog {
 export interface IWorkspacePersistence {
   readonly _serviceBrand: undefined;
 
-  /**
-   * Load the persisted catalog.
-   *
-   * - `undefined` → no usable catalog exists (absent or malformed); the caller
-   *   should rebuild.
- * - `WorkspaceCatalog` (possibly empty) → a materialized catalog; do not rebuild.
-   */
   load(): Promise<WorkspaceCatalog | undefined>;
-  /** Atomically replace the persisted catalog. */
   save(catalog: WorkspaceCatalog): Promise<void>;
   withWriteLock<T>(operation: () => Promise<T>): Promise<T>;
 }

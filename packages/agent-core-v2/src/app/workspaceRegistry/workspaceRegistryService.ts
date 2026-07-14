@@ -218,10 +218,6 @@ export class WorkspaceRegistryService implements IWorkspaceRegistry {
       const entry = parseSessionIndexLine(line.trim());
       if (entry === undefined || !isAbsolute(entry.workDir)) continue;
       const root = normalizeWorkDir(entry.workDir);
-      // The session index records the physical bucket in `sessionDir`. Keep
-      // that id when rebuilding so legacy alias-only buckets remain queryable;
-      // `list()`/`get()` will choose the canonical id only when it is actually
-      // present in the catalog.
       const id = basename(dirname(entry.sessionDir));
       if (id === '' || result.has(id)) continue;
       result.set(id, {
