@@ -292,6 +292,18 @@ describe('AgentProfileService (wire-backed config.update)', () => {
     expect(modelOf(host.wire).thinkingLevel).toBe('high');
   });
 
+  it('returns the persisted effort when a replayed model alias no longer resolves', async () => {
+    const host = buildHost('profile-replay-removed-model');
+
+    await host.wire.replay({
+      type: 'config.update',
+      modelAlias: 'removed-model',
+      thinkingEffort: 'high',
+    });
+
+    expect(host.svc.getEffectiveThinkingLevel()).toBe('high');
+  });
+
   it('rejects conflicting config.update thinking aliases during replay', async () => {
     const host = buildHost('profile-replay-conflicting-thinking-aliases');
 

@@ -166,6 +166,7 @@ export interface IAgentProfileService {
   getAgentsMdWarning(): string | undefined;
   /** Persistent profile data; `thinkingLevel` excludes runtime-only env forcing. */
   data(): ProfileData;
+  getEffectiveThinkingLevel(): ThinkingEffort;
   /** Runtime model context; `thinkingLevel` matches the effort sent to the provider. */
   resolveModelContext(): ProfileModelContext;
   /**

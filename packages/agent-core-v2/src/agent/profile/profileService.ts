@@ -274,6 +274,10 @@ export class AgentProfileService implements IAgentProfileService {
     };
   }
 
+  getEffectiveThinkingLevel(): ThinkingEffort {
+    return this.resolveThinkingState(this.tryResolveRawModel()).effective;
+  }
+
   resolveModelContext(): ProfileModelContext {
     const modelAlias = this.model;
     const model = this.modelFactory.resolve(modelAlias);
@@ -452,7 +456,7 @@ export class AgentProfileService implements IAgentProfileService {
       type: 'agent.status.updated',
       model: this.modelAlias,
       thinkingEffort: includeThinkingEffort
-        ? this.resolveThinkingState(this.tryResolveRawModel()).effective
+        ? this.getEffectiveThinkingLevel()
         : undefined,
       maxContextTokens: this.getModelCapabilities().max_context_tokens,
     });
