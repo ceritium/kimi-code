@@ -138,8 +138,15 @@ storageServiceSuite('InMemoryStorageService', async () => ({
 
 storageServiceSuite('FileStorageService', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'storage-service-test-'));
+  const service = new FileStorageService(dir);
   return {
-    service: new FileStorageService(dir),
-    cleanup: () => rm(dir, { recursive: true, force: true }),
+    service,
+    cleanup: async () => {
+      try {
+        await service.close();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
   };
 });

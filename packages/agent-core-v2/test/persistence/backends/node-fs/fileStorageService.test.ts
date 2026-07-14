@@ -3,8 +3,8 @@
  * temporary files and a controlled directory-fsync boundary.
  */
 
-import { constants } from 'node:fs';
-import { mkdtemp, mkdir, open, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { constants, type BigIntStats } from 'node:fs';
+import { mkdtemp, mkdir, open, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
 import { join } from 'pathe';
@@ -16,6 +16,22 @@ const fsBoundary = vi.hoisted(() => ({
   open: vi.fn<typeof import('node:fs/promises').open>(),
   syncDir: vi.fn<(dir: string) => Promise<void>>(),
 }));
+
+const fsAnchorBoundary = vi.hoisted(() => ({
+  close: vi.fn<typeof import('node:fs').close>(),
+  fstat: vi.fn<typeof import('node:fs').fstat>(),
+  open: vi.fn<typeof import('node:fs').open>(),
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...original,
+    close: fsAnchorBoundary.close,
+    fstat: fsAnchorBoundary.fstat,
+    open: fsAnchorBoundary.open,
+  };
+});
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:fs/promises')>();
@@ -31,7 +47,14 @@ const isWin = process.platform === 'win32';
 const encoder = new TextEncoder();
 
 beforeEach(async () => {
+  const originalFs = await vi.importActual<typeof import('node:fs')>('node:fs');
   const original = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  fsAnchorBoundary.close.mockReset();
+  fsAnchorBoundary.close.mockImplementation(originalFs.close);
+  fsAnchorBoundary.fstat.mockReset();
+  fsAnchorBoundary.fstat.mockImplementation(originalFs.fstat);
+  fsAnchorBoundary.open.mockReset();
+  fsAnchorBoundary.open.mockImplementation(originalFs.open);
   fsBoundary.open.mockReset();
   fsBoundary.open.mockImplementation(original.open);
   fsBoundary.syncDir.mockReset();
@@ -55,17 +78,40 @@ function fsError(code: string): Error & { code: string } {
   return Object.assign(new Error(code), { code });
 }
 
+function servicePool(): {
+  create(baseDir: string, dirMode?: number, fileMode?: number): FileStorageService;
+  close(): Promise<void>;
+} {
+  const services: FileStorageService[] = [];
+  return {
+    create(baseDir, dirMode, fileMode) {
+      const service = new FileStorageService(baseDir, dirMode, fileMode);
+      services.push(service);
+      return service;
+    },
+    async close() {
+      await Promise.all(services.splice(0).map((service) => service.close()));
+    },
+  };
+}
+
 describe('FileStorageService — durable directory entries', () => {
   let dir: string;
   let service: FileStorageService;
+  let services: ReturnType<typeof servicePool>;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'fss-durable-'));
-    service = new FileStorageService(dir);
+    services = servicePool();
+    service = services.create(dir);
   });
 
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    try {
+      await services.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('syncs the directory when a second key is atomically created in the same scope', async () => {
@@ -89,7 +135,7 @@ describe('FileStorageService — durable directory entries', () => {
   });
 
   it('waits for directory durability when two instances first append the same log', async () => {
-    const other = new FileStorageService(dir);
+    const other = services.create(dir);
     const firstEntered = deferred();
     const secondEntered = deferred();
     const release = deferred();
@@ -124,73 +170,105 @@ describe('FileStorageService — durable directory entries', () => {
     expect(fsBoundary.syncDir).toHaveBeenCalledTimes(2);
   });
 
-  it('resyncs the directory when another instance recreates a known log', async () => {
-    const other = new FileStorageService(dir);
-    const probe = await open(join(dir, 'probe'), 'a');
-    const fileHandlePrototype = Object.getPrototypeOf(probe) as {
-      stat(options: { bigint: true }): Promise<{
-        birthtimeNs: bigint;
-        dev: bigint;
-        ino: bigint;
-      }>;
-    };
-    await probe.close();
-    const fileStat = vi
-      .spyOn(fileHandlePrototype, 'stat')
-      .mockResolvedValueOnce({ birthtimeNs: 10n, dev: 1n, ino: 7n })
-      .mockResolvedValueOnce({ birthtimeNs: 20n, dev: 1n, ino: 7n })
-      .mockResolvedValueOnce({ birthtimeNs: 20n, dev: 1n, ino: 7n });
-    const release = deferred();
-    let recreate: Promise<void> | undefined;
-    let appendFromStaleInstance: Promise<void> | undefined;
-
-    try {
-      await service.append('scope', 'wire.jsonl', encoder.encode('old\n'));
-      await other.delete('scope', 'wire.jsonl');
-      fsBoundary.syncDir.mockClear();
-
-      const firstEntered = deferred();
-      const secondEntered = deferred();
-      let entries = 0;
-      fsBoundary.syncDir.mockImplementation(async () => {
-        entries++;
-        if (entries === 1) firstEntered.resolve();
-        if (entries === 2) secondEntered.resolve();
-        await release.promise;
+  it.skipIf(isWin)(
+    'resyncs a recreated log even when the filesystem would recycle its inode',
+    async () => {
+      const other = services.create(dir);
+      const filePath = join(dir, 'scope', 'wire.jsonl');
+      const handles = new WeakMap<object, number>();
+      let openedHandles = 0;
+      const anchorGenerations = new Map<number, bigint>();
+      const originalFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+      const originalPromises = await vi.importActual<typeof import('node:fs/promises')>(
+        'node:fs/promises',
+      );
+      const openAnchorForTest = (
+        path: string,
+        flags: number,
+        callback: (error: NodeJS.ErrnoException | null, fd: number) => void,
+      ): void => {
+        originalFs.open(path, flags, (error, fd) => {
+          if (error !== null) {
+            callback(error, fd);
+            return;
+          }
+          anchorGenerations.set(fd, anchorGenerations.size === 0 ? 7n : 8n);
+          callback(null, fd);
+        });
+      };
+      fsAnchorBoundary.open.mockImplementation(openAnchorForTest as typeof originalFs.open);
+      const fstatAnchorForTest = (
+        fd: number,
+        options: { bigint: true },
+        callback: (error: NodeJS.ErrnoException | null, stats: BigIntStats) => void,
+      ): void => {
+        originalFs.fstat(fd, options, (error, stats) => {
+          if (error !== null) {
+            callback(error, stats);
+            return;
+          }
+          const generation = anchorGenerations.get(fd) ?? 8n;
+          callback(null, { ...stats, dev: 1n, ino: generation } as BigIntStats);
+        });
+      };
+      fsAnchorBoundary.fstat.mockImplementation(fstatAnchorForTest as typeof originalFs.fstat);
+      const closeAnchorForTest = (
+        fd: number,
+        callback: (error?: NodeJS.ErrnoException | null) => void,
+      ): void => {
+        anchorGenerations.delete(fd);
+        originalFs.close(fd, callback);
+      };
+      fsAnchorBoundary.close.mockImplementation(closeAnchorForTest as typeof originalFs.close);
+      fsBoundary.open.mockImplementation(async (...args) => {
+        const handle = await originalPromises.open(...args);
+        if (args[0] === filePath) {
+          const ordinal = ++openedHandles;
+          handles.set(handle, ordinal);
+        }
+        return handle;
       });
-      recreate = other.append('scope', 'wire.jsonl', encoder.encode('new\n'));
-      await firstEntered.promise;
-      appendFromStaleInstance = service.append(
-        'scope',
-        'wire.jsonl',
-        encoder.encode('later\n'),
-      );
 
-      const beforeDurability = await Promise.race([
-        secondEntered.promise.then(() => 'syncing'),
-        appendFromStaleInstance.then(() => 'succeeded'),
-      ]);
-      expect(beforeDurability).toBe('syncing');
+      const probe = await open(join(dir, 'probe'), 'a');
+      const fileHandlePrototype = Object.getPrototypeOf(probe) as {
+        stat(options: { bigint: true }): Promise<{
+          birthtimeNs: bigint;
+          dev: bigint;
+          ino: bigint;
+        }>;
+      };
+      await probe.close();
+      const fileStat = vi.spyOn(fileHandlePrototype, 'stat').mockImplementation(async function (
+        this: object,
+      ) {
+        const ordinal = handles.get(this);
+        if (ordinal === undefined) return { birthtimeNs: 1n, dev: 1n, ino: 1n };
+        return {
+          birthtimeNs: 10n,
+          dev: 1n,
+          ino: anchorGenerations.size === 0 ? 7n : 8n,
+        };
+      });
 
-      release.resolve();
-      await Promise.all([recreate, appendFromStaleInstance]);
-      expect(fsBoundary.syncDir).toHaveBeenCalledTimes(2);
-    } finally {
-      release.resolve();
-      await Promise.allSettled(
-        [recreate, appendFromStaleInstance].filter(
-          (operation): operation is Promise<void> => operation !== undefined,
-        ),
-      );
-      fileStat.mockRestore();
-    }
-  });
+      try {
+        await service.append('scope', 'wire.jsonl', encoder.encode('old\n'));
+        await unlink(filePath);
+        fsBoundary.syncDir.mockClear();
+
+        await other.append('scope', 'wire.jsonl', encoder.encode('new\n'));
+        await service.append('scope', 'wire.jsonl', encoder.encode('later\n'));
+
+        expect(fsBoundary.syncDir).toHaveBeenCalledTimes(2);
+      } finally {
+        fileStat.mockRestore();
+      }
+    },
+  );
 
   it('resyncs each append when the filesystem exposes no stable file identity', async () => {
     const probe = await open(join(dir, 'probe'), 'a');
     const fileHandlePrototype = Object.getPrototypeOf(probe) as {
       stat(options: { bigint: true }): Promise<{
-        birthtimeNs: bigint;
         dev: bigint;
         ino: bigint;
       }>;
@@ -198,7 +276,7 @@ describe('FileStorageService — durable directory entries', () => {
     await probe.close();
     const fileStat = vi
       .spyOn(fileHandlePrototype, 'stat')
-      .mockResolvedValue({ birthtimeNs: 0n, dev: 0n, ino: 0n });
+      .mockResolvedValue({ dev: 0n, ino: 0n });
 
     try {
       await service.append('scope', 'wire.jsonl', encoder.encode('first\n'));
@@ -207,6 +285,30 @@ describe('FileStorageService — durable directory entries', () => {
     } finally {
       fileStat.mockRestore();
     }
+  });
+
+  it('resyncs an evicted log when the anchor cache reaches its limit', async () => {
+    for (let index = 0; index < 65; index++) {
+      await service.append('scope', `wire-${index}.jsonl`, encoder.encode('first\n'));
+    }
+    fsBoundary.syncDir.mockClear();
+
+    await service.append('scope', 'wire-0.jsonl', encoder.encode('second\n'));
+
+    expect(fsBoundary.syncDir).toHaveBeenCalledOnce();
+  });
+
+  it('releases cached append anchors when storage closes', async () => {
+    await service.append('scope', 'wire.jsonl', encoder.encode('first\n'));
+    fsBoundary.syncDir.mockClear();
+    await service.append('scope', 'wire.jsonl', encoder.encode('second\n'));
+    expect(fsBoundary.syncDir).not.toHaveBeenCalled();
+
+    await service.close();
+    fsBoundary.syncDir.mockClear();
+    await service.append('scope', 'wire.jsonl', encoder.encode('third\n'));
+
+    expect(fsBoundary.syncDir).toHaveBeenCalledOnce();
   });
 
   it('reclaims a log that disappears before the non-creating append open', async () => {
@@ -346,17 +448,23 @@ describe('FileStorageService — durable directory entries', () => {
 
 describe('FileStorageService — file permissions', () => {
   let dir: string;
+  let services: ReturnType<typeof servicePool>;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'fss-perm-'));
+    services = servicePool();
   });
 
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    try {
+      await services.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it.skipIf(isWin)('creates scope directories with dirMode (0700)', async () => {
-    const svc = new FileStorageService(dir, 0o700, 0o600);
+    const svc = services.create(dir, 0o700, 0o600);
     await svc.write('cron/ws', 'abc.json', encoder.encode('{}'));
 
     const dirStat = await stat(join(dir, 'cron/ws'));
@@ -364,7 +472,7 @@ describe('FileStorageService — file permissions', () => {
   });
 
   it.skipIf(isWin)('writes documents with fileMode (0600)', async () => {
-    const svc = new FileStorageService(dir, 0o700, 0o600);
+    const svc = services.create(dir, 0o700, 0o600);
     await svc.write('cron/ws', 'abc.json', encoder.encode('{"x":1}'));
 
     const fileStat = await stat(join(dir, 'cron/ws', 'abc.json'));
@@ -374,7 +482,7 @@ describe('FileStorageService — file permissions', () => {
   it.skipIf(isWin)('defaults to the process umask when modes are omitted', async () => {
     // Backwards compatibility: an unconfigured FileStorageService must not
     // start tightening permissions on its own — bootstrap opts into 0700/0600.
-    const svc = new FileStorageService(dir);
+    const svc = services.create(dir);
     await svc.write('scope', 'k.json', encoder.encode('{}'));
     const fileStat = await stat(join(dir, 'scope', 'k.json'));
     // Owner-read/write is always set; we only assert the file is readable by
@@ -385,24 +493,30 @@ describe('FileStorageService — file permissions', () => {
 
 describe('FileStorageService — error translation', () => {
   let dir: string;
+  let services: ReturnType<typeof servicePool>;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'fss-err-'));
+    services = servicePool();
   });
 
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    try {
+      await services.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('keeps ENOENT semantics: read returns undefined, list returns []', async () => {
-    const svc = new FileStorageService(dir);
+    const svc = services.create(dir);
     expect(await svc.read('scope', 'missing.json')).toBeUndefined();
     expect(await svc.list('missing-scope')).toEqual([]);
     await expect(svc.delete('scope', 'missing.json')).resolves.toBeUndefined();
   });
 
   it.skipIf(isWin)('translates non-ENOENT failures into StorageError(io_failed)', async () => {
-    const svc = new FileStorageService(dir);
+    const svc = services.create(dir);
     // Reading a directory fails with EISDIR — an I/O failure, not a miss.
     await mkdir(join(dir, 'scope', 'adir'), { recursive: true });
     await expect(svc.read('scope', 'adir')).rejects.toSatisfy((error: unknown) => {
@@ -419,7 +533,7 @@ describe('FileStorageService — error translation', () => {
   });
 
   it.skipIf(isWin)('translates write failures into StorageError(io_failed)', async () => {
-    const svc = new FileStorageService(dir);
+    const svc = services.create(dir);
     // A file blocks the scope directory: mkdir('<dir>/blocked/k') fails
     // (EEXIST/ENOTDIR depending on platform and fs implementation).
     await writeFile(join(dir, 'blocked'), 'x');

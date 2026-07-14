@@ -5,8 +5,16 @@
  * deletion, and watching through the local filesystem. Bound at App scope.
  */
 
-import { constants, createReadStream, mkdirSync } from 'node:fs';
-import { lstat, mkdir, open, readFile, readdir, stat, unlink } from 'node:fs/promises';
+import {
+  close as closeFd,
+  closeSync,
+  constants,
+  createReadStream,
+  fstat as fstatFd,
+  mkdirSync,
+  open as openFd,
+} from 'node:fs';
+import { lstat, mkdir, open, readFile, readdir, unlink } from 'node:fs/promises';
 import { FSWatcher } from 'chokidar';
 import { dirname, join, normalize } from 'pathe';
 
@@ -24,6 +32,7 @@ import type {
 import { toStorageIoError } from '#/persistence/interface/storage';
 
 const WATCH_DEBOUNCE_MS = 150;
+const MAX_DURABLE_ENTRIES = 64;
 
 function isEnoent(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
@@ -34,41 +43,53 @@ function isEexist(error: unknown): boolean {
 }
 
 interface FileIdentity {
-  readonly birthtimeNs: bigint;
   readonly dev: bigint;
   readonly ino: bigint;
 }
 
 function fileIdentity(stats: {
-  readonly birthtimeNs: bigint;
   readonly dev: bigint;
   readonly ino: bigint;
 }): FileIdentity | undefined {
-  return stats.ino === 0n || stats.birthtimeNs === 0n
-    ? undefined
-    : { birthtimeNs: stats.birthtimeNs, dev: stats.dev, ino: stats.ino };
+  return stats.ino === 0n ? undefined : { dev: stats.dev, ino: stats.ino };
 }
 
 function sameFile(left: FileIdentity | undefined, right: FileIdentity | undefined): boolean {
   return (
     left !== undefined &&
     right !== undefined &&
-    left.birthtimeNs === right.birthtimeNs &&
     left.dev === right.dev &&
     left.ino === right.ino
   );
 }
 
+interface DurableEntry extends FileIdentity {
+  readonly fd: number;
+}
+
+const durableEntryFinalizer = new FinalizationRegistry<Map<string, DurableEntry>>((entries) => {
+  for (const entry of entries.values()) {
+    try {
+      closeSync(entry.fd);
+    } catch (error) {
+      onUnexpectedError(error);
+    }
+  }
+  entries.clear();
+});
+
 export class FileStorageService implements IFileSystemStorageService {
   declare readonly _serviceBrand: undefined;
 
-  private readonly durableEntries = new Map<string, FileIdentity>();
+  private readonly durableEntries = new Map<string, DurableEntry>();
 
   constructor(
     private readonly baseDir: string,
     private readonly dirMode?: number,
     private readonly fileMode?: number,
-  ) {}
+  ) {
+    durableEntryFinalizer.register(this, this.durableEntries);
+  }
 
   async read(scope: string, key: string): Promise<Uint8Array | undefined> {
     const filePath = this.path(scope, key);
@@ -109,11 +130,9 @@ export class FileStorageService implements IFileSystemStorageService {
     const filePath = this.path(scope, key);
     try {
       await mkdir(dirname(filePath), { recursive: true, mode: this.dirMode });
-      this.durableEntries.delete(filePath);
+      await this.removeDurableEntry(filePath);
       await atomicWrite(filePath, data, undefined, this.fileMode);
-      const identity = fileIdentity(await stat(filePath, { bigint: true }));
       await syncDir(dirname(filePath));
-      this.markDurable(filePath, identity);
     } catch (error) {
       throw toStorageIoError(error, { path: filePath, op: 'write' });
     }
@@ -134,7 +153,6 @@ export class FileStorageService implements IFileSystemStorageService {
       while (true) {
         try {
           fh = await open(filePath, 'ax', this.fileMode);
-          this.durableEntries.delete(filePath);
           break;
         } catch (error) {
           if (!isEexist(error)) throw error;
@@ -154,7 +172,6 @@ export class FileStorageService implements IFileSystemStorageService {
           if (entry.isSymbolicLink()) throw error;
         }
       }
-      let identity: FileIdentity | undefined;
       try {
         if (data.byteLength > 0) {
           await fh.writeFile(data);
@@ -162,13 +179,28 @@ export class FileStorageService implements IFileSystemStorageService {
         if (options.durable !== false) {
           await fh.sync();
         }
-        identity = fileIdentity(await fh.stat({ bigint: true }));
+        const identity = fileIdentity(await fh.stat({ bigint: true }));
+        const durableEntry = this.durableEntries.get(filePath);
+        if (
+          durableEntry !== undefined &&
+          sameFile(durableEntry, identity) &&
+          this.touchDurableEntry(filePath, durableEntry)
+        ) {
+          return;
+        }
+        await syncDir(dir);
+        if (identity === undefined) {
+          await this.removeDurableEntry(filePath);
+        } else {
+          const entry = await this.openDurableEntry(filePath, identity);
+          if (entry === undefined) {
+            await this.removeDurableEntry(filePath);
+          } else {
+            await this.installDurableEntry(filePath, entry);
+          }
+        }
       } finally {
         await fh.close();
-      }
-      if (!sameFile(this.durableEntries.get(filePath), identity)) {
-        await syncDir(dir);
-        this.markDurable(filePath, identity);
       }
     } catch (error) {
       throw toStorageIoError(error, { path: filePath, op: 'append' });
@@ -189,13 +221,20 @@ export class FileStorageService implements IFileSystemStorageService {
   async delete(scope: string, key: string): Promise<void> {
     const filePath = this.path(scope, key);
     try {
-      await unlink(filePath);
-      this.durableEntries.delete(filePath);
+      await this.removeDurableEntry(filePath);
     } catch (error) {
-      if (isEnoent(error)) {
-        this.durableEntries.delete(filePath);
-        return;
+      throw toStorageIoError(error, { path: filePath, op: 'delete' });
+    }
+    try {
+      await unlink(filePath);
+    } catch (error) {
+      if (!isEnoent(error)) {
+        throw toStorageIoError(error, { path: filePath, op: 'delete' });
       }
+    }
+    try {
+      await this.removeDurableEntry(filePath);
+    } catch (error) {
       throw toStorageIoError(error, { path: filePath, op: 'delete' });
     }
   }
@@ -266,7 +305,23 @@ export class FileStorageService implements IFileSystemStorageService {
 
   async flush(): Promise<void> {}
 
-  async close(): Promise<void> {}
+  dispose(): void {
+    void this.close().catch(onUnexpectedError);
+  }
+
+  async close(): Promise<void> {
+    const entries = [...this.durableEntries.entries()];
+    this.durableEntries.clear();
+    let firstError: Error | undefined;
+    for (const [filePath, entry] of entries) {
+      try {
+        await closeAnchor(entry.fd);
+      } catch (error) {
+        firstError ??= toStorageIoError(error, { path: filePath, op: 'close' });
+      }
+    }
+    if (firstError !== undefined) throw firstError;
+  }
 
   private path(scope: string, key: string): string {
     return join(this.baseDir, scope, key);
@@ -276,11 +331,81 @@ export class FileStorageService implements IFileSystemStorageService {
     return join(this.baseDir, scope);
   }
 
-  private markDurable(filePath: string, identity: FileIdentity | undefined): void {
-    if (identity === undefined) {
+  private touchDurableEntry(filePath: string, entry: DurableEntry): boolean {
+    if (this.durableEntries.get(filePath) !== entry) return false;
+    this.durableEntries.delete(filePath);
+    this.durableEntries.set(filePath, entry);
+    return true;
+  }
+
+  private async installDurableEntry(filePath: string, entry: DurableEntry): Promise<void> {
+    const entriesToClose: DurableEntry[] = [];
+    const previous = this.durableEntries.get(filePath);
+    if (previous !== undefined) {
       this.durableEntries.delete(filePath);
-    } else {
-      this.durableEntries.set(filePath, identity);
+      if (previous.fd !== entry.fd) entriesToClose.push(previous);
+    }
+    if (this.durableEntries.size >= MAX_DURABLE_ENTRIES) {
+      const oldestPath = this.durableEntries.keys().next().value;
+      if (oldestPath !== undefined) {
+        const oldest = this.durableEntries.get(oldestPath);
+        this.durableEntries.delete(oldestPath);
+        if (oldest !== undefined && oldest.fd !== entry.fd) entriesToClose.push(oldest);
+      }
+    }
+    this.durableEntries.set(filePath, entry);
+    for (const entryToClose of entriesToClose) {
+      try {
+        await closeAnchor(entryToClose.fd);
+      } catch (error) {
+        onUnexpectedError(error);
+      }
     }
   }
+
+  private async removeDurableEntry(filePath: string): Promise<void> {
+    const entry = this.durableEntries.get(filePath);
+    if (entry === undefined) return;
+    this.durableEntries.delete(filePath);
+    await closeAnchor(entry.fd);
+  }
+
+  private openDurableEntry(
+    filePath: string,
+    expectedIdentity: FileIdentity,
+  ): Promise<DurableEntry | undefined> {
+    return new Promise((resolve) => {
+      openFd(filePath, constants.O_WRONLY, (openError, fd) => {
+        if (openError !== null) {
+          if (!isEnoent(openError)) onUnexpectedError(openError);
+          resolve(undefined);
+          return;
+        }
+        fstatFd(fd, { bigint: true }, (statError, stats) => {
+          if (statError !== null) {
+            void closeAnchor(fd).catch(onUnexpectedError);
+            if (!isEnoent(statError)) onUnexpectedError(statError);
+            resolve(undefined);
+            return;
+          }
+          const identity = fileIdentity(stats);
+          if (identity === undefined || !sameFile(identity, expectedIdentity)) {
+            void closeAnchor(fd).catch(onUnexpectedError);
+            resolve(undefined);
+            return;
+          }
+          resolve({ fd, ...identity });
+        });
+      });
+    });
+  }
+}
+
+function closeAnchor(fd: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    closeFd(fd, (error) => {
+      if (error !== null) reject(error);
+      else resolve();
+    });
+  });
 }
