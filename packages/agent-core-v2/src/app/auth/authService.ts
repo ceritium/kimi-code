@@ -510,8 +510,10 @@ export class OAuthService extends Disposable implements IOAuthService {
       await this.config.replace(SERVICES_SECTION, next.services);
     }
     if (cleanup.defaultModelCleared) {
-      await this.config.set(DEFAULT_MODEL_SECTION, undefined);
-      await this.config.set(THINKING_SECTION, undefined);
+      // `set()` cannot delete: its deepMerge resolves an undefined patch back
+      // to the existing base value. `replace()` removes the section instead.
+      await this.config.replace(DEFAULT_MODEL_SECTION, undefined);
+      await this.config.replace(THINKING_SECTION, undefined);
     }
   }
 

@@ -133,6 +133,14 @@ describe('OAuthService', () => {
         services = value as Record<string, unknown> | undefined;
         return;
       }
+      if (domain === 'defaultModel') {
+        defaultModel = value as string | undefined;
+        return;
+      }
+      if (domain === 'thinking') {
+        thinking = value as { enabled?: boolean; effort?: string } | undefined;
+        return;
+      }
       throw new Error(`unexpected config replace: ${domain}`);
     });
     events = [];
@@ -593,8 +601,11 @@ describe('OAuthService', () => {
         maxContextSize: 8192,
       },
     });
-    expect(configSet).toHaveBeenCalledWith('defaultModel', undefined);
-    expect(configSet).toHaveBeenCalledWith('thinking', undefined);
+    // Clearing must go through `replace` — `set()`'s deepMerge cannot delete.
+    expect(configReplace).toHaveBeenCalledWith('defaultModel', undefined);
+    expect(configReplace).toHaveBeenCalledWith('thinking', undefined);
+    expect(defaultModel).toBeUndefined();
+    expect(thinking).toBeUndefined();
   });
 
   it('logout removes managed web services while preserving unrelated services', async () => {
